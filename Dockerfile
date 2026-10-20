@@ -9,7 +9,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/keepsync ./cmd/keepsync
 
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates restic tzdata && \
     addgroup -g 10001 keepsync && adduser -D -u 10001 -G keepsync keepsync && \
     mkdir -p /var/lib/keepsync /restore /cache && chown -R keepsync:keepsync /var/lib/keepsync /restore /cache
