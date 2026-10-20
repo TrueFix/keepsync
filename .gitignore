@@ -1,0 +1,7 @@
+/bin/
+/dist/
+/coverage.out
+/config.json
+/.env
+/secrets/
+*.test

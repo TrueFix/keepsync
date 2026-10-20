@@ -1,0 +1,70 @@
+services:
+  keepsync:
+    image: ghcr.io/truefix/keepsync:${KEEPSYNC_VERSION:-0.1.0}
+    build:
+      context: .
+      args:
+        VERSION: ${KEEPSYNC_VERSION:-0.1.0}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - type: bind
+        source: ${KEEPSYNC_SOURCE:?Set KEEPSYNC_SOURCE to an existing absolute path}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config.json
+        target: /etc/keepsync/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - state:/var/lib/keepsync
+      - cache:/cache
+    secrets:
+      - restic_password
+    tmpfs:
+      - /tmp:mode=1777,size=256m
+    stop_grace_period: 1m
+
+  register:
+    profiles: [setup]
+    image: ghcr.io/truefix/keepsync:${KEEPSYNC_VERSION:-0.1.0}
+    extends: keepsync
+    restart: "no"
+    command: [register-source]
+    volumes:
+      - type: bind
+        source: ${KEEPSYNC_SOURCE:?Set KEEPSYNC_SOURCE}
+        target: /data
+        read_only: false
+        bind:
+          create_host_path: false
+
+  restore:
+    profiles: [recovery]
+    image: ghcr.io/truefix/keepsync:${KEEPSYNC_VERSION:-0.1.0}
+    extends: keepsync
+    restart: "no"
+    volumes:
+      - type: bind
+        source: ${KEEPSYNC_RESTORE:-./recovery}
+        target: /restore
+        bind:
+          create_host_path: false
+
+secrets:
+  restic_password:
+    file: ./secrets/restic_password
+
+volumes:
+  state:
+  cache:

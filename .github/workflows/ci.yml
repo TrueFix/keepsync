@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Go checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+      - name: Install Restic
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y restic
+          else
+            brew install restic
+          fi
+      - name: Format, vet, race and recovery tests
+        env:
+          KEEPSYNC_REQUIRE_INTEGRATION: '1'
+        run: make check
+      - name: Build versioned CLI
+        run: |
+          make build
+          test "$(bin/keepsync version)" = "KeepSync $(tr -d '\n' < VERSION)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+          retention-days: 7
+
+  docker:
+    name: Docker build and smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: keepsync:test
+      - name: Verify runtime and Compose
+        env:
+          KEEPSYNC_SOURCE: /tmp
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          docker run --rm keepsync:test version
+          docker run --rm --entrypoint restic keepsync:test version
+          docker compose --profile setup --profile recovery config --quiet
+          bash scripts/docker-smoke.sh keepsync:test
+
+  security:
+    name: Go vulnerability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  workflows:
+    name: Workflow and shell lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@latest
+      - run: shellcheck scripts/*.sh

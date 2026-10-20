@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible problem
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include expected behavior and reproduction steps. Remove secrets.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: KeepSync version
+      placeholder: Output of keepsync version, or image digest
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and logs
+      description: OS, Docker/Restic version, sanitized configuration and relevant errors.

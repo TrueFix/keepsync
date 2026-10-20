@@ -1,0 +1,17 @@
+{
+  "dataset": "personal-files",
+  "source": "/data",
+  "repository": "s3:s3.amazonaws.com/my-backup-bucket/keepsync/personal-files",
+  "password_file": "/run/secrets/restic_password",
+  "state_dir": "/var/lib/keepsync",
+  "restore_root": "/restore",
+  "interval": "1h",
+  "restic": "restic",
+  "excludes": ["**/.cache/**", "**/node_modules/**"],
+  "retention": {
+    "enabled": false,
+    "keep_daily": 7,
+    "keep_weekly": 4,
+    "keep_monthly": 12
+  }
+}

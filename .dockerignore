@@ -1,0 +1,9 @@
+*
+!go.mod
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!LICENSE
+!third_party/
+!third_party/**
