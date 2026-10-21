@@ -6,7 +6,7 @@
 [![Release](https://github.com/TrueFix/keepsync/actions/workflows/release.yml/badge.svg)](https://github.com/TrueFix/keepsync/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Mount your files at `/data`. KeepSync uploads changes to `Live/` and saves scheduled recovery points under `Snapshots/`. **Restarts resume backups; restores are always explicit.**
+Mount your files at `/data`. KeepSync uploads changes to `Live/` and saves scheduled TAR recovery points directly under `snapshots/`. **Restarts resume backups; restores are always explicit.**
 
 | Snapshot format | Password | Recovery |
 |---|---|---|
@@ -17,12 +17,12 @@ Mount your files at `/data`. KeepSync uploads changes to `Live/` and saves sched
 
 ## Live + TAR snapshots every 30 minutes
 
-Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`. Automatic setup requires `0.3.1` or later.
+Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`. The flat TAR layout requires `0.3.2` or later.
 
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.3.1
+    image: mayankfawkes/keepsync:0.3.2
     restart: unless-stopped
     read_only: true
     cpus: 0.5
@@ -66,14 +66,21 @@ Live changes are batched after 30 seconds of quiet, with a periodic reconciliati
 
 ### Download and extract a TAR snapshot
 
-Download a `.tar.gz` object from `Snapshots/tar/<dataset>/<source-id>/` using your S3 console. Open it with 7-Zip or extract it with:
+Snapshots are stored as a flat pair:
+
+```text
+snapshots/20261021T083000.123456789Z-a1b2c3d4e5f67890.tar.gz
+snapshots/20261021T083000.123456789Z-a1b2c3d4e5f67890.json
+```
+
+The JSON contains source information, creation time, size, and SHA-256. Retention removes both files together. Download the TAR from your S3 console and open it with 7-Zip or extract it with:
 
 ```bash
 mkdir -p recovery
 tar -xzf snapshot.tar.gz -C recovery
 ```
 
-Your readable, editable files are in `recovery/data/`. `keepsync.json` contains backup metadata. No KeepSync installation or password is required.
+Your readable, editable files are in `recovery/data/`. The archive includes `keepsync.json` metadata too, so downloading the TAR alone is enough. No KeepSync installation or password is required. Older nested archives remain readable and expire through normal retention.
 
 ### Restore through the container
 

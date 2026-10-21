@@ -2,6 +2,19 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.3.2 — 2026-10-21
+
+### Changed
+
+- Store new TAR snapshots directly in lowercase `snapshots/`, with a matching `<snapshot-base>.json` file for source information and integrity metadata.
+- Publish metadata after the archive is fully uploaded; listing and retention count complete pairs only.
+- Expire the archive and its metadata together while preserving source-specific ownership checks.
+
+### Compatibility
+
+- Existing nested TAR archives remain readable and participate in normal retention without automatic relocation.
+- Each TAR still embeds its own recovery metadata; downloading the JSON sidecar is optional for manual extraction.
+
 ## 0.3.1 — 2026-10-21
 
 ### Fixed

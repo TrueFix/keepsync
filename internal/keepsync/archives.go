@@ -86,10 +86,11 @@ func (s *Service) createTarSnapshot(ctx context.Context, source string, reg Regi
 	if err != nil {
 		return archiveRecord{}, err
 	}
-	if err := store.ArchivePut(ctx, archiveScope(reg), id, f, info.Size(), hex.EncodeToString(hash.Sum(nil))); err != nil {
+	metadata := archiveMetadata{archiveManifest: manifest, ArchiveKey: archiveKey(id), SourcePath: source, Size: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))}
+	if err := store.ArchivePut(ctx, metadata, f); err != nil {
 		return archiveRecord{}, fmt.Errorf("upload archive: %w", err)
 	}
-	return archiveRecord{ID: id, Key: archiveKey(archiveScope(reg), id), CreatedAt: created, Size: info.Size(), Format: "tar"}, nil
+	return archiveRecord{ID: id, Key: archiveKey(id), MetadataKey: archiveMetadataKey(id), CreatedAt: created, Size: info.Size(), Format: "tar"}, nil
 }
 
 func (s *Service) writeTar(ctx context.Context, source string, tw *tar.Writer, manifest archiveManifest) error {

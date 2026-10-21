@@ -3,7 +3,7 @@
 The README's configuration uses portable, unencrypted TAR snapshots every 30
 minutes. This guide covers encrypted snapshots and additional controls.
 
-The examples use `mayankfawkes/keepsync:0.3.1`. To test a local build instead, run
+The examples use `mayankfawkes/keepsync:0.3.2`. To test a local build instead, run
 `make image VERSION=dev` and set `KEEPSYNC_IMAGE=keepsync:test`.
 
 ## Encrypted Restic configuration
@@ -118,7 +118,7 @@ source directory. Ordinary operation never needs to write into the source.
 
 | Format | Storage | Password | Recovery |
 |---|---|---|---|
-| `tar` | Full `.tar.gz` copies under `Snapshots/tar/<dataset>/<source-id>/` | None | Any standard TAR/GZIP extractor, or KeepSync |
+| `tar` | `.tar.gz` archives and matching `.json` sidecars directly under `snapshots/` | None | Any standard TAR/GZIP extractor, or KeepSync |
 | `restic` | Encrypted, deduplicated repository under `Snapshots/` | Required | KeepSync or Restic |
 
 The default format remains `restic` for compatibility; the minimal Compose
@@ -126,6 +126,19 @@ example explicitly selects `tar`. Switching formats preserves both histories,
 keeps retention separate, and schedules a point in the new format. Select the
 matching format when listing, checking, or restoring history. New snapshots can
 be disabled while existing history remains restorable.
+
+TAR filenames are `<UTC timestamp>-<random>.tar.gz`, with a JSON file using the
+same base name. The sidecar records the dataset, source ID, source path,
+creation time, compressed size, and SHA-256. There are no dataset/source folders
+in the new layout. The JSON is published last; incomplete pairs are not listed
+or counted toward retention. Source information is still checked before
+listing, restoring, or deleting a point, so another source's files are untouched.
+The TAR's internal manifest keeps it independently recoverable on a PC.
+
+Archives from `0.3.0`/`0.3.1` under
+`Snapshots/tar/<dataset>/<source-id>/` remain accessible without being moved.
+Listing and retention include both layouts. Expiring a recovery point removes
+its archive and sidecar, if present; Restic's repository layout is unchanged.
 
 TAR includes regular files, directories, and relative symlinks that stay inside
 `data/`; unsafe links and special files cause the attempt to fail without

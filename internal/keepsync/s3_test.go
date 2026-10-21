@@ -27,7 +27,7 @@ func fakeS3(t *testing.T) (Config, *s3mem.Backend, *atomic.Bool) {
 	fake := gofakes3.New(backend).Server()
 	fail := new(atomic.Bool)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if fail.Load() && r.Method == http.MethodPut && (strings.Contains(r.URL.Path, "/Live/file.txt") || strings.Contains(r.URL.Path, "/Snapshots/tar/")) {
+		if fail.Load() && r.Method == http.MethodPut && (strings.Contains(r.URL.Path, "/Live/file.txt") || strings.Contains(r.URL.Path, "/Snapshots/tar/") || strings.Contains(r.URL.Path, "/snapshots/")) {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(503)
 			_, _ = io.WriteString(w, "<Error><Code>ServiceUnavailable</Code></Error>")

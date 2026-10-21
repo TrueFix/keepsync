@@ -78,7 +78,12 @@ SNAPSHOT_FORMAT=tar run snapshot
 SNAPSHOT_FORMAT=tar run check
 tar_snapshot="$(SNAPSHOT_FORMAT=tar run status | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot_id"])')"
 tar_key="$(SNAPSHOT_FORMAT=tar run snapshots | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["key"])')"
+case "$tar_key" in
+  snapshots/*.tar.gz) ;;
+  *) exit 1 ;;
+esac
+tar_metadata="${tar_key%.tar.gz}.json"
 SNAPSHOT_FORMAT=tar run restore --snapshot "$tar_snapshot" --target /restore/tar-recovered
-docker run --rm --entrypoint sh -v "$root:/work" "$helper" -c \
-  'mkdir -p /work/manual; tar -xzf "/work/repo/$1" -C /work/manual; cmp /work/data/example.txt /work/manual/data/example.txt && cmp /work/data/example.txt /work/restore/tar-recovered/data/example.txt' _ "$tar_key"
+docker run --rm --entrypoint sh -v "$root:/work" "$helper" -ec \
+  'test -f "/work/repo/$2"; mkdir -p /work/manual; tar -xzf "/work/repo/$1" -C /work/manual; cmp /work/data/example.txt /work/manual/data/example.txt; cmp /work/data/example.txt /work/restore/tar-recovered/data/example.txt' _ "$tar_key" "$tar_metadata"
 run check
