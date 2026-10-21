@@ -27,6 +27,8 @@ type Service struct {
 	store   liveStore
 }
 
+var errSourceEmpty = errors.New("source directory has no eligible files; waiting for data")
+
 func New(c Config, out, stderr io.Writer) *Service {
 	if out == nil {
 		out = io.Discard
@@ -87,11 +89,11 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "init":
 		if !s.cfg.Snapshots.Enabled {
-			s.log.Info("Snapshots disabled; register-source binds the Live target")
+			s.log.Info("Snapshots disabled; Live setup runs automatically on startup")
 			return nil
 		}
 		if s.cfg.Snapshots.Format == "tar" {
-			s.log.Info("TAR snapshots require no password or repository initialization; run register-source")
+			s.log.Info("TAR snapshots need no password or repository initialization")
 			return nil
 		}
 		var reg Registration
@@ -119,8 +121,17 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 	case "register-source":
 		return s.register(ctx)
 	case "backup":
+		if err := s.ensureSetup(ctx); err != nil {
+			return err
+		}
 		return s.backup(ctx)
 	case "snapshot":
+		if !s.cfg.Snapshots.Enabled {
+			return s.snapshot(ctx)
+		}
+		if err := s.ensureSetup(ctx); err != nil {
+			return err
+		}
 		return s.snapshot(ctx)
 	case "snapshots", "check", "prune":
 		if _, err := s.snapshotRegistration(ctx); err != nil {
@@ -260,7 +271,7 @@ func (s *Service) register(ctx context.Context) error {
 func (s *Service) registration(ctx context.Context) (Registration, error) {
 	var reg Registration
 	if err := readJSON(s.statePath("registration.json"), &reg); err != nil {
-		return reg, fmt.Errorf("source must be explicitly registered: %w", err)
+		return reg, fmt.Errorf("source setup is incomplete: %w", err)
 	}
 	if reg.Version != 2 {
 		return reg, errors.New("legacy registration: use a new state directory and a fresh Live/Snapshots target; existing backups are unchanged")
@@ -270,6 +281,12 @@ func (s *Service) registration(ctx context.Context) (Registration, error) {
 	}
 	if len(reg.SourceID) != 64 {
 		return reg, errors.New("invalid registered source identity")
+	}
+	if reg.IdentityMode != "" && reg.IdentityMode != "marker" && reg.IdentityMode != "state" {
+		return reg, errors.New("invalid source identity mode")
+	}
+	if reg.IdentityMode == "state" && reg.SourceFileID == "" {
+		return reg, errors.New("state-backed source identity is incomplete")
 	}
 	if _, err := hex.DecodeString(reg.SourceID); err != nil {
 		return reg, errors.New("invalid registered source identity")
@@ -297,7 +314,7 @@ func (s *Service) snapshotRegistration(ctx context.Context) (Registration, error
 		return reg, nil
 	}
 	if reg.RepositoryID == "" {
-		return reg, errors.New("Snapshots repository is not bound; enable snapshots and run init explicitly")
+		return reg, errors.New("encrypted snapshot repository is not initialized yet")
 	}
 	id, err := s.repositoryID(ctx)
 	if err != nil {
@@ -385,7 +402,7 @@ func hasFilesContext(ctx context.Context, source string) error {
 		return err
 	}
 	if !found {
-		return errors.New("source is empty; backup blocked")
+		return errSourceEmpty
 	}
 	return nil
 }
@@ -405,17 +422,34 @@ func (s *Service) source(ctx context.Context) (string, error) {
 	if err := s.safePaths(source); err != nil {
 		return "", err
 	}
-	markerPath := filepath.Join(source, markerName)
-	info, err := os.Lstat(markerPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", errors.New("source identity marker missing or not a regular file")
-	}
-	id, err := os.ReadFile(markerPath)
-	if err != nil {
+	if reg.IdentityMode == "state" {
+		info, err := os.Stat(source)
+		if err != nil {
+			return "", err
+		}
+		_, id := fileMetadata(info)
+		if !info.IsDir() {
+			return "", errors.New("source must be a directory")
+		}
+		if id != reg.SourceFileID {
+			if err := checkSourceMarker(source, reg.SourceID); err != nil {
+				return "", errors.New("source volume changed; existing backup identity preserved")
+			}
+			reg.SourceFileID = id
+			if err := writeJSON(s.statePath("registration.json"), reg); err != nil {
+				return "", err
+			}
+			s.log.Info("Recovered source identity verified", "source", source)
+		}
+		if _, err := os.Lstat(filepath.Join(source, markerName)); err == nil {
+			if err := checkSourceMarker(source, reg.SourceID); err != nil {
+				return "", err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	} else if err := checkSourceMarker(source, reg.SourceID); err != nil {
 		return "", err
-	}
-	if string(id) != reg.SourceID {
-		return "", errors.New("source identity changed; backup blocked")
 	}
 	if err := s.hasSourceFiles(ctx, source); err != nil {
 		return "", err
@@ -453,7 +487,7 @@ func (s *Service) hasSourceFiles(ctx context.Context, source string) error {
 		return err
 	}
 	if !found {
-		return errors.New("no eligible source files; backup blocked")
+		return errSourceEmpty
 	}
 	return nil
 }
@@ -566,5 +600,42 @@ func (s *Service) restore(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(dest, 0700); err != nil {
 		return err
 	}
-	return s.restic(ctx, s.out, "restore", snapshots[0].ID, "--target", dest, "--verify")
+	if err := s.restic(ctx, s.out, "restore", snapshots[0].ID, "--target", dest, "--verify"); err != nil {
+		return err
+	}
+	return writeRecoveryMarker(dest, reg)
+}
+
+func writeRecoveryMarker(dest string, reg Registration) error {
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	rel := filepath.Join(strings.TrimPrefix(reg.Source, string(filepath.Separator)), markerName)
+	if existing, err := root.ReadFile(rel); err == nil {
+		if string(existing) != reg.SourceID {
+			return errors.New("restored source identity differs from registration")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	dir := filepath.Dir(rel)
+	info, err := root.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0200 == 0 {
+		if err := root.Chmod(dir, info.Mode().Perm()|0200); err != nil {
+			return err
+		}
+		defer root.Chmod(dir, info.Mode().Perm())
+	}
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0444)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(reg.SourceID)
+	return errors.Join(err, f.Sync(), f.Close())
 }

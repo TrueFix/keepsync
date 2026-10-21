@@ -2,6 +2,16 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.3.1 — 2026-10-21
+
+### Fixed
+
+- Initialize source identity and a fresh backup target automatically on startup, without requiring `register-source`, `init`, or a writable `/data` mount.
+- Keep source identity in the state volume and verify the mounted directory across restarts; existing marker-based registrations remain supported.
+- Automatically initialize encrypted history when first needed, independently of Live uploads.
+- Wait quietly for files in an empty source and resume as soon as live changes arrive.
+- Preserve recovery identity inside TAR archives and encrypted snapshot metadata without modifying the live source.
+
 ## 0.3.0 — 2026-10-21
 
 ### Added

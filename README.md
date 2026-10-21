@@ -17,12 +17,12 @@ Mount your files at `/data`. KeepSync uploads changes to `Live/` and saves sched
 
 ## Live + TAR snapshots every 30 minutes
 
-Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`. TAR snapshots require version `0.3.0` or later.
+Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`. Automatic setup requires `0.3.1` or later.
 
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.3.0
+    image: mayankfawkes/keepsync:0.3.1
     restart: unless-stopped
     read_only: true
     cpus: 0.5
@@ -50,15 +50,15 @@ volumes:
   keepsync-state:
 ```
 
-Set your target and credentials, then start your application so `./data` contains files. UID/GID `10001:10001` needs read access to the data and write access once for registration:
+Set your target and credentials, mount a directory the container can read, then start it:
 
 ```bash
-docker compose pull keepsync
-docker compose run --rm --volume ./data:/data:rw keepsync register-source
 docker compose up -d keepsync
 ```
 
-No password or `init` command is needed for TAR snapshots. Keep the state volume and `.keepsync-source-id` marker across upgrades. Use a dedicated target prefix and one active writer per dataset.
+On the first run, KeepSync initializes its state and binds an unused target automatically. `/data` stays read-only: no source marker, registration command, or source permission change is required. Empty directories are watched until files arrive. UID/GID `10001:10001` needs read access to the files.
+
+Preserve `keepsync-state` across upgrades and use a dedicated target prefix with one active writer. Saved identities are checked on every backup; a missing state volume does not silently claim an existing backup target.
 
 Live changes are batched after 30 seconds of quiet, with a periodic reconciliation every hour. Snapshots run on startup and every 30 minutes after completion. Retention keeps **7 recovery points, not 7 files**, and never cleans up `Live/`. Local deletions stay in `Live/` unless `KEEPSYNC_DELETE_REMOTE=true`.
 

@@ -109,6 +109,7 @@ func (s *Service) writeTar(ctx context.Context, source string, tw *tar.Writer, m
 	}
 	defer root.Close()
 	files := 0
+	markerSeen := false
 	err = walkTree(ctx, source, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -124,6 +125,9 @@ func (s *Service) writeTar(ctx context.Context, source string, tw *tar.Writer, m
 				return fs.SkipDir
 			}
 			return nil
+		}
+		if rel == markerName {
+			markerSeen = true
 		}
 		info, err := root.Lstat(filepath.FromSlash(rel))
 		if err != nil {
@@ -214,6 +218,14 @@ func (s *Service) writeTar(ctx context.Context, source string, tw *tar.Writer, m
 	}
 	if files == 0 {
 		return errors.New("archive contains no eligible regular files")
+	}
+	if !markerSeen {
+		if err := tw.WriteHeader(&tar.Header{Name: "data/" + markerName, Typeflag: tar.TypeReg, Mode: 0444, Size: int64(len(manifest.SourceID)), ModTime: manifest.CreatedAt, Format: tar.FormatPAX}); err != nil {
+			return err
+		}
+		if _, err := tw.Write([]byte(manifest.SourceID)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -80,7 +80,7 @@ jobs:
           docker run --rm keepsync:test version
           docker run --rm --entrypoint restic keepsync:test version
           docker compose config --quiet
-          docker compose -f compose.advanced.yaml --profile setup config --quiet
+          docker compose -f compose.advanced.yaml config --quiet
           bash scripts/docker-smoke.sh keepsync:test
       - name: Enforce runtime image size budget
         run: |

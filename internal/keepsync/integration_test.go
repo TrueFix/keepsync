@@ -59,11 +59,8 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 	if err := os.WriteFile(file, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	fail("backup") // Never silently initialize or register.
-	run("init")
-	run("register-source")
+	run("backup") // First use initializes state without writing to the source.
 	fail("register-source")
-	run("backup")
 	run("snapshot")
 	var snapshots bytes.Buffer
 	if err := s.restic(ctx, &snapshots, "snapshots", "--json", "--tag", s.tag()); err != nil {

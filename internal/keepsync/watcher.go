@@ -2,6 +2,7 @@ package keepsync
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path"
@@ -263,15 +264,22 @@ func (s *Service) serve(parent context.Context) error {
 	}
 	s.log.Info("KeepSync started", "method", s.cfg.Method, "source", s.cfg.Source, "interval", s.cfg.Interval, "snapshots", s.cfg.Snapshots.Enabled)
 	return s.runLoop(ctx, changes, func(ctx context.Context, command string) error {
-		if command == "changes" {
-			unlock, err := lockState(s.cfg.StateDir)
-			if err != nil {
-				return err
-			}
-			defer unlock()
-			return s.backupChanges(ctx)
+		unlock, err := lockState(s.cfg.StateDir)
+		if err != nil {
+			return err
 		}
-		return s.Run(ctx, []string{command})
+		defer unlock()
+		if err := s.ensureSetup(ctx); err != nil {
+			return err
+		}
+		switch command {
+		case "changes":
+			return s.backupChanges(ctx)
+		case "snapshot":
+			return s.snapshot(ctx)
+		default:
+			return s.backup(ctx)
+		}
 	})
 }
 
@@ -299,6 +307,7 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 	active := ""
 	var dirty batch
 	var retry time.Time
+	waitingForData := false
 	nextBackup := time.Now().Add(duration(s.cfg.Interval))
 	nextSnapshot := s.snapshotDeadline(time.Now())
 	timer := time.NewTimer(time.Hour)
@@ -317,7 +326,7 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 		if s.cfg.Method == "live" && !pendingChanges && !now.Before(retry) && dirty.due(now, duration(s.cfg.Debounce), duration(s.cfg.MaxWait)) {
 			pendingChanges = true
 		}
-		if active != "snapshot" && !pendingSnapshot && !nextSnapshot.IsZero() && !now.Before(nextSnapshot) {
+		if !waitingForData && active != "snapshot" && !pendingSnapshot && !nextSnapshot.IsZero() && !now.Before(nextSnapshot) {
 			if s.snapshotDue(now) {
 				pendingSnapshot = true
 			} else {
@@ -356,7 +365,7 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 				deadline = earlier(deadline, later(d, retry))
 			}
 		}
-		if active != "snapshot" && !pendingSnapshot {
+		if !waitingForData && active != "snapshot" && !pendingSnapshot {
 			deadline = earlier(deadline, nextSnapshot)
 		}
 		if !timer.Stop() {
@@ -391,7 +400,11 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 			wait := duration(s.cfg.Interval)
 			if result.err != nil {
 				wait = min(wait, time.Minute)
-				s.log.Error("Operation failed; retry scheduled", "operation", result.command, "error", result.err, "retry_in", wait)
+				if errors.Is(result.err, errSourceEmpty) {
+					s.log.Info("Waiting for source files", "source", s.cfg.Source, "retry_in", wait)
+				} else {
+					s.log.Error("Operation failed; retry scheduled", "operation", result.command, "error", result.err, "retry_in", wait)
+				}
 			}
 			if result.command == "snapshot" {
 				nextSnapshot = s.snapshotDeadline(time.Now())
@@ -400,12 +413,25 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 				}
 			} else {
 				firstLive = false
+				if errors.Is(result.err, errSourceEmpty) {
+					waitingForData = true
+					pendingSnapshot = false
+					if !nextSnapshot.IsZero() {
+						nextSnapshot = time.Now().Add(wait)
+					}
+				} else if result.err == nil && waitingForData {
+					waitingForData = false
+					nextSnapshot = s.snapshotDeadline(time.Now())
+				}
 				if result.command == "backup" {
 					nextBackup = time.Now().Add(wait)
 				}
 				if result.err != nil {
 					retry = time.Now().Add(wait)
 					nextBackup = retry
+					if errors.Is(result.err, errSourceEmpty) {
+						retry = time.Time{}
+					}
 					pendingBackup = false
 					pendingChanges = false
 				} else {

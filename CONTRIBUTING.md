@@ -15,8 +15,9 @@ Open an issue for larger changes, then submit a focused pull request.
 4. Releases publish Linux amd64/arm64 Docker images; local Go builds are for development.
 5. Document user-visible changes in `CHANGELOG.md`.
 
-Safety invariants must remain intact: startup never restores or initializes;
-missing source identity blocks backups; restore never targets live source;
+Safety invariants must remain intact: startup initializes only an unclaimed
+target and never restores. Setup must work with a read-only source. Existing
+state and target identities are verified, and restore never targets live source;
 snapshot retention runs only after a confirmed snapshot; failed operations never
 become successful status entries. Watch-triggered work must stay scoped, bounded,
 and serialized with snapshot creation.

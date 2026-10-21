@@ -3,7 +3,7 @@
 The README's configuration uses portable, unencrypted TAR snapshots every 30
 minutes. This guide covers encrypted snapshots and additional controls.
 
-The examples use `mayankfawkes/keepsync:0.3.0`. To test a local build instead, run
+The examples use `mayankfawkes/keepsync:0.3.1`. To test a local build instead, run
 `make image VERSION=dev` and set `KEEPSYNC_IMAGE=keepsync:test`.
 
 ## Encrypted Restic configuration
@@ -47,18 +47,18 @@ Live uploads remain ordinary objects using the bucket's encryption settings.
 ### Initialize and start
 
 Set `KEEPSYNC_TARGET`, the source path, and AWS credentials in your shell or `.env`.
-Ensure the application has created files and UID `10001` can read them and create
-the source marker during registration.
+UID `10001` only needs read access to the source. Startup initializes a fresh
+target and its state automatically, keeping the source mount read-only. An empty
+source is monitored until the application creates files.
 
 ```bash
-docker compose -f compose.advanced.yaml run --rm keepsync init
-docker compose -f compose.advanced.yaml --profile setup run --rm register
 docker compose -f compose.advanced.yaml up -d keepsync
 ```
 
-Skip `init` for an existing Restic repository. If the source is already registered
-and you are enabling Restic for the first time, `init` binds the newly initialized
-repository to the existing registration; do not register again.
+The encrypted repository is initialized automatically when the first snapshot
+runs. The mounted password is still required. Existing bound repositories are
+verified rather than recreated. Live uploads remain independent of snapshot
+password or repository failures.
 
 ## Recover encrypted history
 
@@ -102,9 +102,17 @@ the endpoint in the repository URL, for example
 
 TAR history needs neither local state nor a password: download the archive and
 run `tar -xzf snapshot.tar.gz -C ./recovery`. Its `data/` directory contains the
-files. Both formats preserve the source identity marker by default. Review the
-recovery and adjust ownership for the application before promoting it to live
-data. Preserve the original state volume when returning data to the same path.
+files and a recoverable identity marker. KeepSync's Restic restore adds the same
+marker; standalone Restic recovery can obtain the ID from the snapshot's
+`keepsync-source:<id>` tag if the recovered data has no marker. Save that ID as
+`.keepsync-source-id` in the recovered source before reconnecting to the same
+target without the original state. Older manually registered backups already
+contain that marker.
+
+Review the recovery and adjust ownership for the application before promoting
+it to live data. Preserve the original state volume when returning data to the
+same path. KeepSync verifies the restored marker before accepting a replaced
+source directory. Ordinary operation never needs to write into the source.
 
 ## Choosing a format
 

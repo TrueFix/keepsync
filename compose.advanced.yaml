@@ -1,7 +1,7 @@
 # Complete encrypted configuration. Use this file on its own, not as an override.
 services:
   keepsync:
-    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.0}
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.1}
     restart: unless-stopped
     read_only: true
     cpus: ${KEEPSYNC_CPUS:-0.5}
@@ -49,19 +49,6 @@ services:
     tmpfs:
       - /tmp:mode=1777,size=16m
     stop_grace_period: 1m
-
-  register:
-    profiles: [setup]
-    extends: keepsync
-    restart: "no"
-    command: [register-source]
-    volumes:
-      - type: bind
-        source: ${KEEPSYNC_SOURCE:-./data}
-        target: /data
-        read_only: false
-        bind:
-          create_host_path: false
 
 secrets:
   restic_password:

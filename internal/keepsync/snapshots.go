@@ -50,6 +50,9 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	if err := s.ensureSnapshotRepository(ctx); err != nil {
+		return err
+	}
 	reg, err := s.snapshotRegistration(ctx)
 	if err != nil {
 		return err
@@ -75,7 +78,7 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 	// Preserve the source identity in encrypted history so an explicit recovery
 	// can resume against the same Live target after replacing a lost disk.
 	pendingTag := s.tag() + ":pending"
-	args := []string{"backup", "--json", "--read-concurrency", "1", "--tag", pendingTag, "--host", s.cfg.Dataset}
+	args := []string{"backup", "--json", "--read-concurrency", "1", "--tag", pendingTag, "--tag", "keepsync-source:" + reg.SourceID, "--host", s.cfg.Dataset}
 	for _, exclude := range s.cfg.Excludes {
 		args = append(args, "--exclude", exclude)
 	}
@@ -96,7 +99,7 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 	// into the retained history only after a successful backup, so failed or
 	// interrupted attempts cannot displace healthy recovery points.
 	var promoted snapshotOutput
-	if err := s.restic(ctx, &promoted, "tag", "--json", "--set", s.tag(), summary.SnapshotID); err != nil {
+	if err := s.restic(ctx, &promoted, "tag", "--json", "--set", s.tag()+",keepsync-source:"+reg.SourceID, summary.SnapshotID); err != nil {
 		return err
 	}
 	if promoted.err != nil {
@@ -132,7 +135,7 @@ func (s *Service) retain(ctx context.Context) error {
 		}
 		return s.retainTar(ctx, reg, status.SnapshotID)
 	}
-	if err := s.restic(ctx, io.Discard, "forget", "--prune", "--tag", s.tag(), "--group-by", "tags", "--keep-last", fmt.Sprint(s.cfg.Snapshots.KeepLast)); err != nil {
+	if err := s.restic(ctx, io.Discard, "forget", "--prune", "--tag", s.tag(), "--group-by", "", "--keep-last", fmt.Sprint(s.cfg.Snapshots.KeepLast)); err != nil {
 		return err
 	}
 	s.log.Info("Snapshot retention complete", "keep_last", s.cfg.Snapshots.KeepLast)

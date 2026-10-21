@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -88,11 +89,53 @@ func (t target) snapshots() string {
 }
 
 type liveStore interface {
+	Empty(context.Context) (bool, error)
 	Bind(context.Context, string) error
 	Identity(context.Context) (string, error)
 	Matches(context.Context, string, fileEntry) (bool, error)
 	Upload(context.Context, string, *os.File, fileEntry) error
 	Delete(context.Context, string) error
+}
+
+func (s *s3Store) Empty(ctx context.Context) (bool, error) {
+	prefix := s.target.prefix
+	if prefix != "" {
+		prefix += "/"
+	}
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: aws.String(s.target.bucket), Prefix: aws.String(prefix), MaxKeys: aws.Int32(128)})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, object := range page.Contents {
+			if aws.ToInt64(object.Size) != 0 || !strings.HasSuffix(aws.ToString(object.Key), "/") {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+func (s *localStore) Empty(ctx context.Context) (bool, error) {
+	base := filepath.Dir(s.root)
+	if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	empty := true
+	err := walkTree(ctx, base, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			empty = false
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return empty, err
 }
 
 func (s *Service) live(ctx context.Context) (liveStore, error) {

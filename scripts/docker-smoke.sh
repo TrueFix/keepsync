@@ -3,7 +3,8 @@ set -euo pipefail
 image="${1:?image required}"
 helper="alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 root="$(mktemp -d)"
-trap 'docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -c "rm -rf /work/*"; rmdir "$root"' EXIT
+cid=""
+trap 'if [ -n "$cid" ]; then docker rm -f "$cid"; fi; docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -c "rm -rf /work/*"; rmdir "$root"' EXIT
 mkdir -p "$root"/{data,state,repo,restore,secrets}
 printf 'recover me\n' > "$root/data/example.txt"
 printf 'test-password\n' > "$root/secrets/password"
@@ -22,11 +23,49 @@ run() {
     -v "$root/restore:/restore" "${password_mount[@]}" \
     "$image" "$@"
 }
-if run backup; then
-  exit 1
-fi
-run init
-SOURCE_MODE=rw run register-source
+
+# The public entrypoint must work on a fresh state volume with /data read-only.
+start() {
+  cid="$(docker run -d --read-only --tmpfs /tmp:mode=1777 --tmpfs /cache:mode=1777 \
+    -e KEEPSYNC_DATASET=smoke -e KEEPSYNC_TARGET=/repo -e KEEPSYNC_METHOD=live \
+    -e KEEPSYNC_SNAPSHOTS_ENABLED=true -e KEEPSYNC_SNAPSHOT_FORMAT=tar \
+    -v "$root/data:/data:ro" -v "$root/state:/var/lib/keepsync" -v "$root/repo:/repo" \
+    "$image")"
+}
+ready() {
+  docker exec "$cid" /usr/local/bin/keepsync status 2>/dev/null | python3 -c '
+import json,sys
+try:
+    status=json.load(sys.stdin)
+    success=status.get("last_success", "")
+    assert success and not success.startswith("0001") and success != sys.argv[1]
+    assert status.get("snapshot_id") and not status.get("last_error") and not status.get("snapshot_error")
+except (ValueError, AssertionError):
+    sys.exit(1)
+' "${previous_success:-}"
+}
+wait_ready() {
+  for _ in {1..60}; do
+    if ready; then return; fi
+    sleep 1
+  done
+  docker logs "$cid"
+  return 1
+}
+start
+wait_ready
+previous_success="$(docker exec "$cid" /usr/local/bin/keepsync status | python3 -c 'import json,sys; print(json.load(sys.stdin)["last_success"])')"
+docker stop "$cid"
+docker rm "$cid"
+cid=""
+start
+wait_ready
+docker stop "$cid"
+docker rm "$cid"
+cid=""
+docker run --rm --entrypoint sh -v "$root:/work" "$helper" -c 'test ! -e /work/data/.keepsync-source-id'
+
+# Encrypted history is initialized automatically when it is first requested.
 run backup
 run snapshot
 run check
