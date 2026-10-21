@@ -2,18 +2,44 @@
 
 Open an issue for larger changes, then submit a focused pull request.
 
-1. Install Go 1.26+ and Restic 0.16+ on Linux or macOS.
+1. Install Go 1.27.3+ on Linux or macOS, then build the tested Restic tool:
+
+   ```bash
+   go run ./scripts/resticbuild -output "$(go env GOPATH)/bin/restic"
+   ```
+
+   Ensure `$(go env GOPATH)/bin` is on your `PATH`.
 2. Run `KEEPSYNC_REQUIRE_INTEGRATION=1 make check`.
-3. Run `make build release` for packaging changes.
-4. For Docker changes, build the image and run
-   `bash scripts/docker-smoke.sh keepsync:test` with a `keepsync:test` image.
+3. Run `make image-test` for Docker or packaging changes. This builds the image
+   and exercises environment-based setup, backup, integrity checking, and recovery.
+4. Releases publish Linux amd64/arm64 Docker images; local Go builds are for development.
 5. Document user-visible changes in `CHANGELOG.md`.
 
 Safety invariants must remain intact: startup never restores or initializes;
 missing source identity blocks backups; restore never targets live source;
-retention is explicit; failed backups never become successful status entries.
+snapshot retention runs only after a confirmed snapshot; failed operations never
+become successful status entries. Watch-triggered work must stay scoped, bounded,
+and serialized with snapshot creation.
+
+Run `make build && go run ./scripts/resourcecheck` on Linux to measure actual
+idle RSS/CPU against an S3 emulator. The default fixture has 1,000 small files.
+CI enforces a 40 MiB unpacked runtime-image budget.
 
 Add meaningful regression tests when changing these boundaries. Do not commit
 credentials, source data, repository passwords, local configuration, or artifacts.
 
-Maintainers release using the procedure in the README. Never retag a release.
+To release, update `VERSION`, the default Compose image version, `.env.example`,
+and `CHANGELOG.md`, then push a matching annotated `vMAJOR.MINOR.PATCH` tag after
+CI passes. The release workflow tests that exact commit and publishes the Docker
+image and release notes. Never retag a release.
+
+Docker Hub releases publish `mayankfawkes/keepsync:<version>` and update `latest`
+for stable versions only. Create that Docker Hub repository, then add these
+GitHub repository Actions secrets before tagging:
+
+- `DOCKERHUB_USERNAME`: Docker Hub login with access to the repository.
+- `DOCKERHUB_TOKEN`: Docker Hub access token with read/write permission.
+
+The workflow uses GitHub's token for GitHub release notes and provenance only.
+If a release fails, fix the cause and use the Release workflow's manual run with
+the existing tag; do not move the tag.

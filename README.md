@@ -1,141 +1,131 @@
 # KeepSync
 
-**Encrypted S3 backups. Predictable restarts. Explicit restores.**
+**Live S3 backups and optional snapshot history, built for Docker.**
 
 [![CI](https://github.com/TrueFix/keepsync/actions/workflows/ci.yml/badge.svg)](https://github.com/TrueFix/keepsync/actions/workflows/ci.yml)
-[![Security](https://github.com/TrueFix/keepsync/actions/workflows/security.yml/badge.svg)](https://github.com/TrueFix/keepsync/actions/workflows/security.yml)
 [![Release](https://github.com/TrueFix/keepsync/actions/workflows/release.yml/badge.svg)](https://github.com/TrueFix/keepsync/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-KeepSync is a lightweight backup service built in Go and packaged for Docker. It uses [Restic](https://restic.net/) to store encrypted, deduplicated snapshots in Amazon S3 or S3-compatible storage.
-
-**On restart, KeepSync continues backing up local files to S3. Restoring files always requires an explicit command.**
+Mount your application's files at `/data`. KeepSync watches for changes, uploads them to S3, and optionally saves encrypted recovery points on a separate schedule.
 
 ```text
-Backup    Local files ──→ Encrypted snapshots in S3
-Restore   Selected snapshot ──→ Separate recovery directory
+s3://your-bucket/backups/app/
+├── Live/        Files under their original relative paths
+└── Snapshots/   Encrypted, deduplicated Restic history
 ```
 
-## Features
+**Restarts resume backups. Restores are always explicit.** `Live/` uses your bucket's encryption settings; snapshots use client-side encryption through [Restic](https://restic.net/).
 
-- **Scheduled snapshots** — incremental backups at a configurable interval.
-- **Source validation** — missing identity markers, mismatched volumes, and empty sources block backups.
-- **Read-only access** — the backup container cannot modify your source files.
-- **Verified restores** — recover a specific snapshot into a new or empty directory.
-- **Explicit retention** — cleanup is opt-in and runs separately from backups.
-- **Portable deployment** — Linux amd64/arm64 Docker images and Linux/macOS binaries.
+## Docker Compose 🐳
 
-## Quick start 🐳
+```yaml
+services:
+  keepsync:
+    image: mayankfawkes/keepsync:0.2.0
+    restart: unless-stopped
+    read_only: true
+    cpus: 0.5
+    mem_limit: 256m
+    environment:
+      KEEPSYNC_TARGET: s3://your-bucket/backups/app
+      KEEPSYNC_DATASET: app-files
+      KEEPSYNC_METHOD: live
+      KEEPSYNC_DEBOUNCE: 30s
+      KEEPSYNC_INTERVAL: 1h
+      KEEPSYNC_SNAPSHOTS_ENABLED: "true"
+      KEEPSYNC_SNAPSHOT_INTERVAL: 24h
+      KEEPSYNC_SNAPSHOT_RETAIN: "7"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - keepsync-state:/var/lib/keepsync
+      - keepsync-cache:/cache
+    secrets:
+      - restic_password
+    tmpfs:
+      - /tmp:mode=1777,size=16m
 
-Requires Docker Compose, an S3 bucket, and an existing directory to back up.
+secrets:
+  restic_password:
+    file: ./secrets/restic_password
 
-### 1. Configure
+volumes:
+  keepsync-state:
+  keepsync-cache:
+```
+
+Images are published on [Docker Hub](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` and `arm64`. Set your S3 target and AWS credentials in your shell or `.env`. Save a strong snapshot password in `secrets/restic_password` and keep a separate recovery copy.
+
+### First-time setup
+
+Start your application so `./data` contains files. The container runs as UID/GID `10001:10001`: it needs read access to the data/password and write access to the data directory once for registration.
 
 ```bash
-git clone https://github.com/TrueFix/keepsync.git
-cd keepsync
-cp config.example.json config.json
-cp .env.example .env
-mkdir -p secrets recovery
-```
-
-Set your bucket and prefix in `config.json`:
-
-```json
-"repository": "s3:s3.amazonaws.com/your-bucket/keepsync/personal-files"
-```
-
-Update `.env` with your absolute source and recovery paths and AWS credentials. Save your repository encryption password in `secrets/restic_password` and keep a separate recovery copy.
-
-The container runs as UID/GID `10001:10001`. Give it read access to source files and the password, and write access to the recovery directory. Registration also needs permission to create `.keepsync-source-id` in the source directory.
-
-### 2. Initialize
-
-```bash
-docker compose build
+docker compose pull keepsync
 docker compose run --rm keepsync init
-docker compose --profile setup run --rm register
-```
-
-Run `init` only for a new repository. Registration binds the source directory and repository identities to the persistent state volume.
-
-### 3. Start
-
-```bash
+docker compose run --rm --volume ./data:/data:rw keepsync register-source
 docker compose up -d keepsync
-docker compose logs -f keepsync
 ```
 
-A backup runs immediately on startup, then after each configured interval. Failed attempts retry at the same interval. Keep the source marker and state volume across restarts and upgrades, and use one active backup writer per dataset.
+Skip `init` for existing snapshot repositories. Preserve the source's `.keepsync-source-id` marker and the state volume across upgrades. Use a dedicated S3 prefix and one active writer per dataset.
 
-## Backup and restore
+**Named volumes:** replace the source bind mount with `your-volume:/data:ro`, keeping state/cache mounts. Register with `--volume your-volume:/data:rw`; declare externally owned volumes as external in Compose.
+
+## How it works
+
+- **Live mode:** batches changes after 30 seconds of quiet. Continuous writes trigger an attempt after `KEEPSYNC_MAX_WAIT` (default `5m`). The interval remains a full reconciliation fallback.
+- **Interval mode:** set `KEEPSYNC_METHOD=interval` to back up on startup and after each interval.
+- **Snapshots:** run independently of file changes. The example keeps **7 confirmed recovery points**, not 7 individual files. Retention never touches `Live/`.
+
+Set `KEEPSYNC_SNAPSHOTS_ENABLED=false` for Live-only backups; the password and secret mount are then unnecessary. Local deletions stay in `Live/` unless `KEEPSYNC_DELETE_REMOTE=true`. Missing identities and empty sources block backups.
+
+For databases, back up a native dump or consistent filesystem snapshot. Live uploads cover regular files; snapshots also preserve symlinks.
+
+## Commands and logs
 
 ```bash
-# Create a backup now
-docker compose run --rm keepsync backup
-
-# View backup status and available snapshots
+docker compose logs -f keepsync
 docker compose run --rm keepsync status
+docker compose run --rm keepsync backup
+docker compose run --rm keepsync snapshot
 docker compose run --rm keepsync snapshots
-
-# Verify repository integrity
 docker compose run --rm keepsync check
 ```
 
-To restore, choose a snapshot ID and an empty destination under `/restore`:
+Logs show confirmed uploads and size changes:
+
+```text
+msg="FILE uploaded" path=FILEA.JSON size_change="1125 -> 5500 B"
+msg="Snapshot saved" snapshot=ab12cd34...
+msg="Snapshot retention complete" keep_last=7
+```
+
+Use `KEEPSYNC_LOG_FORMAT=json` for structured logs or `KEEPSYNC_LOG_FILES=false` for summaries only. `status` reports Live and snapshot results separately.
+
+## Restore
+
+Choose an ID from `snapshots` and create a recovery directory writable by the container user:
 
 ```bash
-docker compose --profile recovery run --rm restore \
+docker compose run --rm --volume ./recovery:/restore keepsync \
   restore --snapshot <snapshot-id> --target /restore/recovered
 ```
 
-Backing up `/data` restores files beneath `/restore/recovered/data`. The live source is never a restore destination. Recovery also works when the source data is missing; Compose still requires an existing host directory for its source mount.
+Files appear under `./recovery/recovered/data`. The destination must be new or empty and separate from the live source. Live-only files can be downloaded directly from S3.
 
-Local deletions remain recoverable from earlier snapshots until those snapshots expire. With retention enabled in your configuration, run cleanup explicitly:
+## Lightweight by design
 
-```bash
-docker compose run --rm keepsync prune
-```
+Multi-stage builds produce a non-root `scratch` runtime with static executables and TLS roots. The service sleeps between events, keeps its index on disk, and uploads one file at a time. Staging uses disk space on the state volume, not whole-file memory buffers.
 
-Cleanup requires a successful last backup and permanently removes expired recovery points. Monitor `status` for the last successful backup time; container uptime alone does not indicate backup health.
+A local Linux test with 1,000 small files, one watched directory, and snapshots disabled measured **16.53 MiB idle RAM** and **0.000% CPU over 5 seconds**. Usage varies with workload; large snapshot repositories may need a higher memory limit. CI enforces a **40 MiB unpacked image budget**.
 
-## Configuration
+For S3-compatible storage, set `KEEPSYNC_S3_ENDPOINT`. Advanced settings are in [`config.example.json`](config.example.json); select a complete JSON configuration with `--config /path/to/config.json` before each command.
 
-See [`config.example.json`](config.example.json) for the complete configuration.
-
-| Setting | Purpose |
-|---|---|
-| `dataset` | Stable name used to identify this dataset's snapshots |
-| `source` | Absolute path to the directory being backed up |
-| `repository` | S3 or S3-compatible Restic repository URL |
-| `password_file` | Path to the repository encryption password |
-| `state_dir` | Persistent registration and backup status |
-| `restore_root` | Parent directory for restore destinations |
-| `interval` | Backup interval, such as `30m`, `1h`, or `24h` |
-| `excludes` | Restic file exclusion patterns |
-| `retention` | Opt-in daily, weekly, and monthly snapshot retention |
-
-Source, state, and restore directories must be separate. Configuration uses strict JSON; unknown fields are rejected.
-
-For a native installation, install Restic and place `--config` before the command:
-
-```bash
-keepsync --config /path/to/config.json backup
-```
-
-## Development
-
-Requires Go 1.26+ and Restic 0.16+ on Linux or macOS.
-
-```bash
-make build
-KEEPSYNC_REQUIRE_INTEGRATION=1 make check
-```
-
-CI runs race detection, real backup/restore tests, Docker smoke tests, linting, and security scans. Valid version tags matching [`VERSION`](VERSION) trigger GitHub releases and multi-architecture images at `ghcr.io/truefix/keepsync`.
-
-[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
-
-## License
-
-[MIT](LICENSE). Restic is distributed under the [BSD 2-Clause License](third_party/restic.LICENSE).
+[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [MIT License](LICENSE)

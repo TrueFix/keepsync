@@ -4,6 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/restic
+    schedule:
+      interval: weekly
+    groups:
+      restic:
+        patterns: ['*']
   - package-ecosystem: docker
     directory: /
     schedule:

@@ -11,20 +11,38 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 type Service struct {
-	cfg Config
-	out io.Writer
-	err io.Writer
+	cfg     Config
+	out     io.Writer
+	err     io.Writer
+	log     *slog.Logger
+	pending *changeSet
+	store   liveStore
 }
 
-func New(c Config, out, stderr io.Writer) *Service { return &Service{c, out, stderr} }
+func New(c Config, out, stderr io.Writer) *Service {
+	if out == nil {
+		out = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	var level slog.Level
+	_ = level.UnmarshalText([]byte(c.LogLevel))
+	opts := &slog.HandlerOptions{Level: level}
+	var h slog.Handler = slog.NewTextHandler(out, opts)
+	if c.LogFormat == "json" {
+		h = slog.NewJSONHandler(out, opts)
+	}
+	return &Service{cfg: c, out: out, err: stderr, log: slog.New(h), pending: &changeSet{}}
+}
 
 func (s *Service) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -49,6 +67,13 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 	if args[0] == "serve" {
 		return s.serve(ctx)
 	}
+	if args[0] == "status" {
+		var status Status
+		if err := readJSON(s.statePath("status.json"), &status); err != nil {
+			return err
+		}
+		return json.NewEncoder(s.out).Encode(status)
+	}
 	unlock, err := lockState(s.cfg.StateDir)
 	if err != nil {
 		return err
@@ -56,13 +81,40 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 	defer unlock()
 	switch args[0] {
 	case "init":
-		return s.restic(ctx, s.out, "init")
+		if !s.cfg.Snapshots.Enabled {
+			s.log.Info("Snapshots disabled; register-source binds the Live target")
+			return nil
+		}
+		var reg Registration
+		existing := false
+		if err := readJSON(s.statePath("registration.json"), &reg); err == nil {
+			existing = true
+			if _, err := s.registration(ctx); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := s.restic(ctx, s.out, "init"); err != nil {
+			return err
+		}
+		if existing {
+			id, err := s.repositoryID(ctx)
+			if err != nil {
+				return err
+			}
+			reg.RepositoryID = id
+			return writeJSON(s.statePath("registration.json"), reg)
+		}
+		return nil
 	case "register-source":
 		return s.register(ctx)
 	case "backup":
 		return s.backup(ctx)
+	case "snapshot":
+		return s.snapshot(ctx)
 	case "snapshots", "check", "prune":
-		if _, err := s.registration(ctx); err != nil {
+		if _, err := s.snapshotRegistration(ctx); err != nil {
 			return err
 		}
 		switch args[0] {
@@ -73,12 +125,6 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 		default:
 			return s.prune(ctx)
 		}
-	case "status":
-		var status Status
-		if err := readJSON(s.statePath("status.json"), &status); err != nil {
-			return err
-		}
-		return json.NewEncoder(s.out).Encode(status)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -88,18 +134,34 @@ func (s *Service) statePath(name string) string { return filepath.Join(s.cfg.Sta
 func (s *Service) tag() string                  { return "keepsync:" + s.cfg.Dataset }
 
 func (s *Service) restic(ctx context.Context, out io.Writer, args ...string) error {
-	base := []string{"--repo", s.cfg.Repository, "--password-file", s.cfg.PasswordFile}
+	t, err := parseTarget(s.cfg.Repository, s.cfg.S3Endpoint)
+	if err != nil {
+		return err
+	}
+	base := []string{"--repo", t.snapshots(), "--password-file", s.cfg.PasswordFile}
+	if t.bucket != "" {
+		base = append(base, "-o", "s3.connections=2")
+	}
 	cmd := exec.CommandContext(ctx, s.cfg.Restic, append(base, args...)...)
 	// The configuration, rather than inherited Restic selectors, defines this dataset.
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
-		if !strings.HasPrefix(key, "RESTIC_") {
+		if !strings.HasPrefix(key, "RESTIC_") && key != "GOMEMLIMIT" && key != "GOMAXPROCS" && key != "TMPDIR" {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
-	cmd.Stdout, cmd.Stderr = out, s.err
+	memory := os.Getenv("KEEPSYNC_SNAPSHOT_MEMORY_LIMIT")
+	if memory == "" {
+		memory = "128MiB"
+	}
+	if err := os.MkdirAll(s.statePath("tmp"), 0700); err != nil {
+		return err
+	}
+	cmd.Env = append(cmd.Env, "GOMAXPROCS=1", "GOMEMLIMIT="+memory, "TMPDIR="+s.statePath("tmp"))
+	stderr := cappedOutput{limit: 64 << 10}
+	cmd.Stdout, cmd.Stderr = out, &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("restic %s failed: %w", args[0], err)
+		return fmt.Errorf("restic %s failed: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
@@ -129,12 +191,15 @@ func (s *Service) register(ctx context.Context) error {
 	if err := s.safePaths(source); err != nil {
 		return err
 	}
-	if err := hasFiles(source); err != nil {
+	if err := s.hasSourceFiles(ctx, source); err != nil {
 		return err
 	}
-	repoID, err := s.repositoryID(ctx)
-	if err != nil {
-		return err
+	var repoID string
+	if s.cfg.Snapshots.Enabled {
+		repoID, err = s.repositoryID(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	marker := filepath.Join(source, markerName)
 	if info, err := os.Lstat(marker); err == nil && !info.Mode().IsRegular() {
@@ -165,7 +230,15 @@ func (s *Service) register(ctx context.Context) error {
 	if _, err := hex.DecodeString(string(id)); err != nil {
 		return errors.New("invalid source identity")
 	}
-	reg := Registration{s.cfg.Dataset, source, string(id), s.cfg.Repository, repoID}
+	store, err := s.live(ctx)
+	if err != nil {
+		return err
+	}
+	if err := store.Bind(ctx, string(id)); err != nil {
+		return err
+	}
+	reg := Registration{Version: 2, Dataset: s.cfg.Dataset, Source: source, SourceID: string(id), Repository: s.cfg.Repository, RepositoryID: repoID}
+	s.log.Info("Source registered", "source", source, "dataset", s.cfg.Dataset)
 	return writeJSON(s.statePath("registration.json"), reg)
 }
 
@@ -174,15 +247,40 @@ func (s *Service) registration(ctx context.Context) (Registration, error) {
 	if err := readJSON(s.statePath("registration.json"), &reg); err != nil {
 		return reg, fmt.Errorf("source must be explicitly registered: %w", err)
 	}
-	if reg.Dataset != s.cfg.Dataset || reg.Repository != s.cfg.Repository || reg.SourceID == "" || reg.RepositoryID == "" {
+	if reg.Version != 2 {
+		return reg, errors.New("legacy registration: use a new state directory and a fresh Live/Snapshots target; existing backups are unchanged")
+	}
+	if reg.Dataset != s.cfg.Dataset || reg.Repository != s.cfg.Repository || reg.SourceID == "" {
 		return reg, errors.New("configuration does not match registered dataset/repository")
+	}
+	store, err := s.live(ctx)
+	if err != nil {
+		return reg, err
+	}
+	id, err := store.Identity(ctx)
+	if err != nil {
+		return reg, err
+	}
+	if reg.SourceID != id {
+		return reg, errors.New("Live source identity changed; refusing operation")
+	}
+	return reg, nil
+}
+
+func (s *Service) snapshotRegistration(ctx context.Context) (Registration, error) {
+	reg, err := s.registration(ctx)
+	if err != nil {
+		return reg, err
+	}
+	if reg.RepositoryID == "" {
+		return reg, errors.New("Snapshots repository is not bound; enable snapshots and run init explicitly")
 	}
 	id, err := s.repositoryID(ctx)
 	if err != nil {
 		return reg, err
 	}
-	if reg.RepositoryID != id {
-		return reg, errors.New("repository identity changed; refusing operation")
+	if id != reg.RepositoryID {
+		return reg, errors.New("Snapshots repository identity changed; refusing operation")
 	}
 	return reg, nil
 }
@@ -220,10 +318,27 @@ func (s *Service) safePaths(source string) error {
 	if overlaps(source, state) || overlaps(source, restore) || overlaps(state, restore) || within(source, password) {
 		return errors.New("resolved paths overlap protected data")
 	}
+	t, err := parseTarget(s.cfg.Repository, s.cfg.S3Endpoint)
+	if err != nil {
+		return err
+	}
+	if t.local != "" {
+		dest, err := resolved(t.local)
+		if err != nil {
+			return err
+		}
+		if overlaps(source, dest) || overlaps(state, dest) || overlaps(restore, dest) || within(dest, password) {
+			return errors.New("local target overlaps protected paths")
+		}
+	}
 	return nil
 }
 
 func hasFiles(source string) error {
+	return hasFilesContext(context.Background(), source)
+}
+
+func hasFilesContext(ctx context.Context, source string) error {
 	info, err := os.Stat(source)
 	if err != nil {
 		return err
@@ -232,12 +347,13 @@ func hasFiles(source string) error {
 		return errors.New("source must be a directory")
 	}
 	found := false
-	err = filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
+	err = walkTree(ctx, source, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if path != filepath.Join(source, markerName) && (d.Type().IsRegular() || d.Type()&os.ModeSymlink != 0) {
+		if path != filepath.Join(source, markerName) && d.Type().IsRegular() {
 			found = true
+			return fs.SkipAll
 		}
 		return nil
 	})
@@ -250,93 +366,86 @@ func hasFiles(source string) error {
 	return nil
 }
 
-func (s *Service) backup(ctx context.Context) (result error) {
-	var status Status
-	if err := readJSON(s.statePath("status.json"), &status); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("cannot read previous backup status: %w", err)
-	}
-	status.LastAttempt = time.Now().UTC()
-	status.LastError = "backup interrupted or still running"
-	if err := writeJSON(s.statePath("status.json"), status); err != nil {
-		return err
-	}
-	defer func() {
-		if result == nil {
-			status.LastSuccess, status.LastError = time.Now().UTC(), ""
-		} else {
-			status.LastError = result.Error()
-		}
-		result = errors.Join(result, writeJSON(s.statePath("status.json"), status))
-	}()
+func (s *Service) source(ctx context.Context) (string, error) {
 	reg, err := s.registration(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	source, err := filepath.EvalSymlinks(s.cfg.Source)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if source != reg.Source {
-		return errors.New("source path differs from registered source")
+		return "", errors.New("source path differs from registered source")
 	}
 	if err := s.safePaths(source); err != nil {
-		return err
+		return "", err
 	}
 	markerPath := filepath.Join(source, markerName)
 	info, err := os.Lstat(markerPath)
 	if err != nil || !info.Mode().IsRegular() {
-		return errors.New("source identity marker missing or not a regular file")
+		return "", errors.New("source identity marker missing or not a regular file")
 	}
 	id, err := os.ReadFile(markerPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if string(id) != reg.SourceID {
-		return errors.New("source identity changed; backup blocked")
+		return "", errors.New("source identity changed; backup blocked")
 	}
-	if err := hasFiles(source); err != nil {
-		return err
+	if err := s.hasSourceFiles(ctx, source); err != nil {
+		return "", err
 	}
-	args := []string{"backup", "--tag", s.tag(), "--host", s.cfg.Dataset, "--exclude", markerPath}
-	for _, exclude := range s.cfg.Excludes {
-		args = append(args, "--exclude", exclude)
-	}
-	args = append(args, "--", source)
-	return s.restic(ctx, s.out, args...)
+	return source, nil
 }
 
-func (s *Service) serve(ctx context.Context) error {
-	interval, _ := time.ParseDuration(s.cfg.Interval)
-	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err := s.Run(ctx, []string{"backup"}); err != nil && ctx.Err() == nil {
-			fmt.Fprintln(s.err, "backup blocked or failed:", err)
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case <-timer.C:
-		}
+func (s *Service) hasSourceFiles(ctx context.Context, source string) error {
+	if len(s.cfg.Excludes) == 0 {
+		return hasFilesContext(ctx, source)
 	}
+	found := false
+	err := walkTree(ctx, source, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if s.excluded(rel, d.IsDir()) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.Type().IsRegular() {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("no eligible source files; backup blocked")
+	}
+	return nil
 }
 
 func (s *Service) prune(ctx context.Context) error {
-	r := s.cfg.Retention
-	if !r.Enabled {
-		return errors.New("retention is disabled; no snapshots removed")
+	if !s.cfg.Snapshots.Enabled {
+		return errors.New("snapshots are disabled")
 	}
 	var status Status
 	if err := readJSON(s.statePath("status.json"), &status); err != nil {
 		return fmt.Errorf("retention requires a successful backup: %w", err)
 	}
-	if status.LastSuccess.IsZero() || status.LastError != "" {
-		return errors.New("retention blocked: the last backup did not succeed")
+	if status.LastSnapshot.IsZero() || status.SnapshotError != "" {
+		return errors.New("retention blocked: the last snapshot did not succeed")
 	}
-	return s.restic(ctx, s.out, "forget", "--prune", "--tag", s.tag(), "--group-by", "tags", "--keep-daily", fmt.Sprint(r.KeepDaily), "--keep-weekly", fmt.Sprint(r.KeepWeekly), "--keep-monthly", fmt.Sprint(r.KeepMonthly))
+	return s.retain(ctx)
 }
 
 func (s *Service) restore(ctx context.Context, args []string) error {
@@ -350,15 +459,18 @@ func (s *Service) restore(ctx context.Context, args []string) error {
 	if flags.NArg() != 0 || len(*snapshot) < 8 || len(*snapshot) > 64 || !filepath.IsAbs(*target) {
 		return errors.New("restore requires --snapshot HEX_ID (8–64 characters) and --target ABSOLUTE_PATH")
 	}
-	if _, err := hex.DecodeString(*snapshot); err != nil {
-		return errors.New("snapshot must be a hexadecimal ID, not latest")
+	*snapshot = strings.ToLower(*snapshot)
+	for _, ch := range *snapshot {
+		if !strings.ContainsRune("0123456789abcdef", ch) {
+			return errors.New("snapshot must be a hexadecimal ID, not latest")
+		}
 	}
 	unlock, err := lockState(s.cfg.StateDir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	reg, err := s.registration(ctx)
+	reg, err := s.snapshotRegistration(ctx)
 	if err != nil {
 		return err
 	}

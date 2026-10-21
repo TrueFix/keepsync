@@ -13,6 +13,7 @@ import (
 const markerName = ".keepsync-source-id"
 
 type Registration struct {
+	Version      int    `json:"version"`
 	Dataset      string `json:"dataset"`
 	Source       string `json:"source"`
 	SourceID     string `json:"source_id"`
@@ -21,9 +22,13 @@ type Registration struct {
 }
 
 type Status struct {
-	LastAttempt time.Time `json:"last_attempt,omitempty"`
-	LastSuccess time.Time `json:"last_success,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
+	LastAttempt     time.Time `json:"last_attempt,omitempty"`
+	LastSuccess     time.Time `json:"last_success,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+	SnapshotAttempt time.Time `json:"snapshot_attempt,omitempty"`
+	LastSnapshot    time.Time `json:"last_snapshot,omitempty"`
+	SnapshotID      string    `json:"snapshot_id,omitempty"`
+	SnapshotError   string    `json:"snapshot_error,omitempty"`
 }
 
 func readJSON(path string, dst any) error {
@@ -65,10 +70,14 @@ func writeJSON(path string, v any) error {
 // Kernel locks are released automatically on exit, including an unclean restart.
 // State must be on a local filesystem that supports flock, not an object mount.
 func lockState(dir string) (func(), error) {
+	return lockNamed(dir, "operation.lock")
+}
+
+func lockNamed(dir, name string) (func(), error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "operation.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}

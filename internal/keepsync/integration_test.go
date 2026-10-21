@@ -21,6 +21,24 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 		t.Skip("restic not installed")
 	}
 	c := testConfig(t)
+	c.Snapshots.Enabled = true
+	for key, value := range map[string]string{
+		"KEEPSYNC_DATASET":           c.Dataset,
+		"KEEPSYNC_SOURCE_PATH":       c.Source,
+		"KEEPSYNC_TARGET":            c.Repository,
+		"KEEPSYNC_PASSWORD_FILE":     c.PasswordFile,
+		"KEEPSYNC_STATE_DIR":         c.StateDir,
+		"KEEPSYNC_RESTORE_ROOT":      c.RestoreRoot,
+		"KEEPSYNC_INTERVAL":          c.Interval,
+		"KEEPSYNC_SNAPSHOTS_ENABLED": "true",
+	} {
+		t.Setenv(key, value)
+	}
+	var err error
+	c, err = LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	s := New(c, &output, &output)
 	ctx := context.Background()
@@ -46,6 +64,7 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 	run("register-source")
 	fail("register-source")
 	run("backup")
+	run("snapshot")
 	var snapshots bytes.Buffer
 	if err := s.restic(ctx, &snapshots, "snapshots", "--json", "--tag", s.tag()); err != nil {
 		t.Fatal(err)
@@ -71,7 +90,9 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil || status.LastSuccess.IsZero() || status.LastError != "" {
 		t.Fatalf("bad status: %s", output.String())
 	}
+	s.cfg.Snapshots.Enabled = false
 	fail("prune")
+	s.cfg.Snapshots.Enabled = true
 	fail("restore", "--snapshot", "latest", "--target", filepath.Join(c.RestoreRoot, "bad"))
 	fail("restore", "--snapshot", id, "--target", c.Source)
 	fail("restore", "--snapshot", id, "--target", c.RestoreRoot)
@@ -104,9 +125,8 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail("backup") // Empty source does not become a successful recovery point.
-	s.cfg.Retention.Enabled = true
-	s.cfg.Retention.KeepDaily = 7
-	fail("prune") // Explicit retention also refuses a failed last backup.
+	fail("snapshot")
+	fail("prune") // Failed snapshots never trigger cleanup.
 	run("status")
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil || status.LastSuccess.IsZero() || status.LastError == "" {
 		t.Fatal("failure lost previous success status")

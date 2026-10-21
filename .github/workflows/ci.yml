@@ -6,36 +6,39 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      ref:
+        description: Exact source revision to test for a release
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Go checks (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Go checks (ubuntu-24.04)
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           check-latest: true
           cache: false
       - name: Install Restic
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update
-            sudo apt-get install -y restic
-          else
-            brew install restic
-          fi
+          go run ./scripts/resticbuild -output "$(go env GOPATH)/bin/restic"
+          restic version
+      - name: Test backup engine compatibility
+        run: |
+          go -C tools/restic mod verify
+          go run ./scripts/resticbuild -action test
       - name: Format, vet, race and recovery tests
         env:
           KEEPSYNC_REQUIRE_INTEGRATION: '1'
@@ -44,9 +47,11 @@ jobs:
         run: |
           make build
           test "$(bin/keepsync version)" = "KeepSync $(tr -d '\n' < VERSION)"
-      - uses: actions/upload-artifact@v4
+      - name: Measure idle sidecar resources
+        run: go run ./scripts/resourcecheck -files 1000 -idle 5s
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage-${{ matrix.os }}
+          name: coverage
           path: coverage.out
           retention-days: 7
 
@@ -55,11 +60,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true
@@ -67,40 +73,50 @@ jobs:
       - name: Verify runtime and Compose
         env:
           KEEPSYNC_SOURCE: /tmp
+          KEEPSYNC_TARGET: s3://test-bucket/files
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
         run: |
           docker run --rm keepsync:test version
           docker run --rm --entrypoint restic keepsync:test version
-          docker compose --profile setup --profile recovery config --quiet
+          docker compose config --quiet
           bash scripts/docker-smoke.sh keepsync:test
+      - name: Enforce runtime image size budget
+        run: |
+          size="$(docker image inspect keepsync:test --format '{{.Size}}')"
+          echo "Runtime image: $size bytes (budget: 40 MiB)"
+          test "$size" -le 41943040
 
   security:
     name: Go vulnerability scan
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           check-latest: true
           cache: false
-      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Scan Restic dependencies
+        run: go run ./scripts/resticbuild -action scan
 
   workflows:
     name: Workflow and shell lint
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
-      - run: go run github.com/rhysd/actionlint/cmd/actionlint@latest
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - run: shellcheck scripts/*.sh

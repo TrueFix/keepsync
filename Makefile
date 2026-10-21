@@ -1,9 +1,9 @@
 VERSION ?= $(shell tr -d '\n' < VERSION)
 GO ?= go
 
-.PHONY: build test check fmt release clean
+.PHONY: build test check fmt image image-test clean
 build:
-	$(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o bin/keepsync ./cmd/keepsync
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$(VERSION)" -o bin/keepsync ./cmd/keepsync
 test:
 	$(GO) test -race -count=1 -coverprofile=coverage.out ./...
 check:
@@ -12,7 +12,9 @@ check:
 	$(MAKE) test
 fmt:
 	$(GO) fmt ./...
-release:
-	bash scripts/build-release.sh "$(VERSION)"
+image:
+	docker build --build-arg VERSION=$(VERSION) -t keepsync:test .
+image-test: image
+	bash scripts/docker-smoke.sh keepsync:test
 clean:
 	rm -rf bin dist coverage.out

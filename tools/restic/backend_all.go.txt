@@ -1,0 +1,15 @@
+// KeepSync's S3/local-only registry. Restic is BSD-2-Clause licensed.
+package all
+
+import (
+    "github.com/restic/restic/internal/backend/local"
+    "github.com/restic/restic/internal/backend/location"
+    "github.com/restic/restic/internal/backend/s3"
+)
+
+func Backends() *location.Registry {
+    backends := location.NewRegistry()
+    backends.Register(local.NewFactory())
+    backends.Register(s3.NewFactory())
+    return backends
+}

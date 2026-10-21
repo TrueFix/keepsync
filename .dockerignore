@@ -1,5 +1,14 @@
 *
 !go.mod
+!go.sum
+!tools/
+!tools/restic/
+!tools/restic/go.mod
+!tools/restic/go.sum
+!tools/restic/*.go.txt
+!scripts/
+!scripts/resticbuild/
+!scripts/resticbuild/**
 !cmd/
 !cmd/**
 !internal/
