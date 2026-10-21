@@ -116,6 +116,58 @@ func (s *Service) ensureSetup(ctx context.Context) error {
 	return nil
 }
 
+// reclaim rebuilds local registration from an already-claimed Live target
+// after the state volume was lost. Unlike ensureSetup, it trusts the mounted
+// source without comparing a previously recorded file ID: running this
+// command is an explicit operator decision, never an automatic fallback
+// during backup, snapshot, or serve.
+func (s *Service) reclaim(ctx context.Context) error {
+	if _, err := os.Stat(s.statePath("registration.json")); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("registration already exists; reclaim only applies when local state is missing")
+	}
+	source, err := filepath.EvalSymlinks(s.cfg.Source)
+	if err != nil {
+		return err
+	}
+	if err := s.safePaths(source); err != nil {
+		return err
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("source must be a directory")
+	}
+	if err := s.hasSourceFiles(ctx, source); err != nil {
+		return err
+	}
+	_, fileID := fileMetadata(info)
+	if fileID == "" {
+		return errors.New("source filesystem does not provide a stable volume identity")
+	}
+	store, err := s.live(ctx)
+	if err != nil {
+		return err
+	}
+	id, err := store.Identity(ctx)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || missingObject(err) {
+			return errors.New("backup target has no existing identity to reclaim; start normally instead")
+		}
+		return err
+	}
+	if !validSourceID(id) {
+		return errors.New("existing backup target has an invalid source identity")
+	}
+	reg := Registration{Version: 2, Dataset: s.cfg.Dataset, Source: source, Repository: s.cfg.Repository, SourceID: id, IdentityMode: "state", SourceFileID: fileID}
+	if err := writeJSON(s.statePath("registration.json"), reg); err != nil {
+		return err
+	}
+	s.log.Info("Backup target reclaimed", "source", source, "dataset", s.cfg.Dataset)
+	return nil
+}
+
 func validSourceID(id string) bool {
 	if len(id) != 64 {
 		return false

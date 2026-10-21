@@ -98,7 +98,7 @@ func TestRunLoopWaitsForStateVolumeWithoutErrorSpam(t *testing.T) {
 			return errStateVolumeRequired
 		})
 	}()
-	waitFor(t, time.Second, func() bool { return logs.count("reattach state volume") >= 1 })
+	waitFor(t, time.Second, func() bool { return logs.count("keepsync reclaim") >= 1 })
 	if logs.count("ERROR") > 0 {
 		t.Fatal("missing state should wait quietly, not log ERROR retries")
 	}

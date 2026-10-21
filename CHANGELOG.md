@@ -2,11 +2,15 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
-## 0.3.4 — 2026-10-22
+## 0.3.5 — 2026-10-22
+
+### Added
+
+- `keepsync reclaim`: an explicit, operator-initiated command that rebuilds local registration from an already-claimed Live target when the state volume was lost, so an existing backup is not stranded behind a manual file-surgery fix.
 
 ### Changed
 
-- When the backup target already contains Live data but local state is missing, `serve` waits quietly and retries instead of logging repeated backup/snapshot errors.
+- When the backup target already contains Live data but local state is missing, `serve` waits quietly and retries instead of logging repeated backup/snapshot errors, and points the operator at `keepsync reclaim`.
 
 ## 0.3.3 — 2026-10-21
 

@@ -60,6 +60,25 @@ func TestAutomaticSetupReadOnlySourceAndRestart(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(c.Repository, "Live", "file.json")); err != nil || string(b) != "latest" {
 		t.Fatal("lost state changed remote data")
 	}
+	// An explicit reclaim rebuilds local state from the existing target and
+	// resumes backups without touching what is already on S3.
+	reclaimer := New(lost, io.Discard, io.Discard)
+	if err := reclaimer.Run(ctx, []string{"reclaim"}); err != nil {
+		t.Fatal("reclaim failed:", err)
+	}
+	var reclaimed Registration
+	if err := readJSON(reclaimer.statePath("registration.json"), &reclaimed); err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed.SourceID != reg.SourceID {
+		t.Fatal("reclaim recovered the wrong source identity")
+	}
+	if err := reclaimer.Run(ctx, []string{"backup"}); err != nil {
+		t.Fatal("backup after reclaim failed:", err)
+	}
+	if err := reclaimer.Run(ctx, []string{"reclaim"}); err == nil {
+		t.Fatal("reclaim must refuse to run once registration already exists")
+	}
 	// Keep the original inode allocated so a replacement cannot reuse it.
 	old := c.Source + "-old"
 	if err := os.Rename(c.Source, old); err != nil {

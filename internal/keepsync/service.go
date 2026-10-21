@@ -29,7 +29,7 @@ type Service struct {
 
 var errSourceEmpty = errors.New("source directory has no eligible files; waiting for data")
 
-var errStateVolumeRequired = errors.New("local source state is missing for a non-empty backup target; reattach the original keepsync-state volume")
+var errStateVolumeRequired = errors.New("local source state is missing for a non-empty backup target; run `keepsync reclaim` to reattach it, or point KEEPSYNC_TARGET at a new prefix")
 
 func New(c Config, out, stderr io.Writer) *Service {
 	if out == nil {
@@ -122,6 +122,8 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 		return nil
 	case "register-source":
 		return s.register(ctx)
+	case "reclaim":
+		return s.reclaim(ctx)
 	case "backup":
 		if err := s.ensureSetup(ctx); err != nil {
 			return err

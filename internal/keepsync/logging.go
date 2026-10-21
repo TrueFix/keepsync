@@ -132,9 +132,12 @@ func (h *compactHandler) Handle(_ context.Context, r slog.Record) error {
 		text = str("source") + " · waiting for files"
 	case "Waiting for keepsync state":
 		label, color = "WAIT", "33"
-		text = "reattach state volume · " + str("target")
+		text = "run `keepsync reclaim` to reattach · " + str("target")
 	case "Source initialized automatically":
 		label, text = "SETUP", str("source")
+	case "Backup target reclaimed":
+		label, color = "SETUP", "32"
+		text = str("source") + " · state rebuilt from remote identity"
 	case "Initializing encrypted snapshot repository":
 		label, text = "INIT", "encrypted snapshots"
 	case "Archive restored":
