@@ -28,10 +28,13 @@ CI enforces a 40 MiB unpacked runtime-image budget.
 Add meaningful regression tests when changing these boundaries. Do not commit
 credentials, source data, repository passwords, local configuration, or artifacts.
 
-To release, update `VERSION`, the default Compose image version, `.env.example`,
+To release, update `VERSION`, published image references, `.env.example`,
 and `CHANGELOG.md`, then push a matching annotated `vMAJOR.MINOR.PATCH` tag after
 CI passes. The release workflow tests that exact commit and publishes the Docker
 image and release notes. Never retag a release.
+
+Test both `compose.yaml` (portable TAR) and `compose.advanced.yaml` (encrypted
+Restic) when changing deployment examples.
 
 Docker Hub releases publish `mayankfawkes/keepsync:<version>` and update `latest`
 for stable versions only. Create that Docker Hub repository, then add these

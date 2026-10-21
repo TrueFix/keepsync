@@ -4,4 +4,6 @@
 /config.json
 /.env
 /secrets/
+/data/
+/recovery/
 *.test

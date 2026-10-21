@@ -53,6 +53,7 @@ func TestConfigRejectsUnsafeValues(t *testing.T) {
 		{"max wait shorter than debounce", func(c *Config) { c.MaxWait = "1s" }},
 		{"invalid snapshot interval", func(c *Config) { c.Snapshots.Interval = "0s" }},
 		{"invalid watch limit", func(c *Config) { c.MaxWatches = 0 }},
+		{"unknown snapshot format", func(c *Config) { c.Snapshots.Format = "zip" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := testConfig(t)
@@ -117,7 +118,7 @@ func TestEmptySourceIgnoresMarker(t *testing.T) {
 }
 
 func TestComposeEnvironmentConfiguration(t *testing.T) {
-	for _, key := range []string{"KEEPSYNC_TARGET", "KEEPSYNC_DATASET", "KEEPSYNC_SOURCE_PATH", "KEEPSYNC_REPOSITORY", "KEEPSYNC_PASSWORD_FILE", "KEEPSYNC_STATE_DIR", "KEEPSYNC_RESTORE_ROOT", "KEEPSYNC_INTERVAL", "KEEPSYNC_METHOD", "KEEPSYNC_DEBOUNCE", "KEEPSYNC_MAX_WAIT", "KEEPSYNC_SNAPSHOTS_ENABLED", "KEEPSYNC_SNAPSHOT_INTERVAL", "KEEPSYNC_SNAPSHOT_RETAIN", "KEEPSYNC_LOG_LEVEL", "KEEPSYNC_LOG_FORMAT", "KEEPSYNC_LOG_FILES", "KEEPSYNC_DELETE_REMOTE", "KEEPSYNC_EXCLUDES", "KEEPSYNC_S3_ENDPOINT"} {
+	for _, key := range []string{"KEEPSYNC_TARGET", "KEEPSYNC_DATASET", "KEEPSYNC_SOURCE_PATH", "KEEPSYNC_REPOSITORY", "KEEPSYNC_PASSWORD_FILE", "KEEPSYNC_STATE_DIR", "KEEPSYNC_RESTORE_ROOT", "KEEPSYNC_INTERVAL", "KEEPSYNC_METHOD", "KEEPSYNC_DEBOUNCE", "KEEPSYNC_MAX_WAIT", "KEEPSYNC_SNAPSHOTS_ENABLED", "KEEPSYNC_SNAPSHOT_FORMAT", "KEEPSYNC_SNAPSHOT_INTERVAL", "KEEPSYNC_SNAPSHOT_RETAIN", "KEEPSYNC_LOG_LEVEL", "KEEPSYNC_LOG_FORMAT", "KEEPSYNC_LOG_FILES", "KEEPSYNC_DELETE_REMOTE", "KEEPSYNC_EXCLUDES", "KEEPSYNC_S3_ENDPOINT", "KEEPSYNC_MAX_WATCHES"} {
 		old, exists := os.LookupEnv(key)
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)

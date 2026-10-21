@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -17,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/logging"
 )
 
 type target struct{ local, bucket, prefix, endpoint string }
@@ -109,6 +111,7 @@ func (s *Service) live(ctx context.Context) (liveStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg.Logger = sdkLogger{s.log}
 	if cfg.Region == "" {
 		cfg.Region = os.Getenv("AWS_DEFAULT_REGION")
 		if cfg.Region == "" {
@@ -133,6 +136,19 @@ type s3Store struct {
 	target   target
 	client   *s3.Client
 	uploader *transfermanager.Client
+}
+
+type sdkLogger struct{ log *slog.Logger }
+
+func (l sdkLogger) Logf(classification logging.Classification, format string, args ...interface{}) {
+	level := slog.LevelDebug
+	if classification == logging.Warn {
+		level = slog.LevelWarn
+	}
+	ctx := context.Background()
+	if l.log.Enabled(ctx, level) {
+		l.log.Log(ctx, level, fmt.Sprintf(format, args...))
+	}
 }
 
 func (s *s3Store) key(rel string) string { return path.Join(s.target.prefix, "Live", rel) }

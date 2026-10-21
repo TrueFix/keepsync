@@ -16,6 +16,7 @@ import (
 
 type SnapshotConfig struct {
 	Enabled  bool   `json:"enabled"`
+	Format   string `json:"format"`
 	Interval string `json:"interval"`
 	KeepLast int    `json:"keep_last"`
 }
@@ -48,7 +49,7 @@ func defaultConfig() Config {
 		StateDir: "/var/lib/keepsync", RestoreRoot: "/restore", Method: "interval",
 		Interval: "1h", Debounce: "30s", MaxWait: "5m", MaxWatches: 8192, Restic: "restic",
 		LogFormat: "text", LogLevel: "info", LogFiles: true,
-		Snapshots: SnapshotConfig{Interval: "24h", KeepLast: 7},
+		Snapshots: SnapshotConfig{Format: "restic", Interval: "24h", KeepLast: 7},
 	}
 }
 
@@ -83,6 +84,7 @@ func loadEnvironment() (Config, error) {
 		"KEEPSYNC_MAX_WAIT": &c.MaxWait, "KEEPSYNC_LOG_FORMAT": &c.LogFormat,
 		"KEEPSYNC_LOG_LEVEL": &c.LogLevel, "KEEPSYNC_S3_ENDPOINT": &c.S3Endpoint,
 		"KEEPSYNC_SNAPSHOT_INTERVAL": &c.Snapshots.Interval,
+		"KEEPSYNC_SNAPSHOT_FORMAT":   &c.Snapshots.Format,
 	} {
 		if v, ok := os.LookupEnv(key); ok {
 			*dest = v
@@ -152,6 +154,9 @@ func (c Config) Validate() error {
 	}
 	if c.Snapshots.KeepLast < 1 {
 		return errors.New("snapshot keep_last must be at least 1")
+	}
+	if c.Snapshots.Format != "restic" && c.Snapshots.Format != "tar" {
+		return errors.New("snapshot format must be restic or tar")
 	}
 	if c.MaxWatches < 1 {
 		return errors.New("max_watches must be at least 1")

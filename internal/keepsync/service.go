@@ -79,10 +79,19 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	defer unlock()
+	if args[0] != "backup" {
+		if err := s.cleanupTransfers(); err != nil {
+			return err
+		}
+	}
 	switch args[0] {
 	case "init":
 		if !s.cfg.Snapshots.Enabled {
 			s.log.Info("Snapshots disabled; register-source binds the Live target")
+			return nil
+		}
+		if s.cfg.Snapshots.Format == "tar" {
+			s.log.Info("TAR snapshots require no password or repository initialization; run register-source")
 			return nil
 		}
 		var reg Registration
@@ -119,8 +128,14 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 		}
 		switch args[0] {
 		case "snapshots":
+			if s.cfg.Snapshots.Format == "tar" {
+				return s.listTar(ctx)
+			}
 			return s.restic(ctx, s.out, "snapshots", "--tag", s.tag())
 		case "check":
+			if s.cfg.Snapshots.Format == "tar" {
+				return s.checkTar(ctx)
+			}
 			return s.restic(ctx, s.out, "check", "--read-data")
 		default:
 			return s.prune(ctx)
@@ -195,7 +210,7 @@ func (s *Service) register(ctx context.Context) error {
 		return err
 	}
 	var repoID string
-	if s.cfg.Snapshots.Enabled {
+	if s.cfg.Snapshots.Enabled && s.cfg.Snapshots.Format == "restic" {
 		repoID, err = s.repositoryID(ctx)
 		if err != nil {
 			return err
@@ -253,6 +268,12 @@ func (s *Service) registration(ctx context.Context) (Registration, error) {
 	if reg.Dataset != s.cfg.Dataset || reg.Repository != s.cfg.Repository || reg.SourceID == "" {
 		return reg, errors.New("configuration does not match registered dataset/repository")
 	}
+	if len(reg.SourceID) != 64 {
+		return reg, errors.New("invalid registered source identity")
+	}
+	if _, err := hex.DecodeString(reg.SourceID); err != nil {
+		return reg, errors.New("invalid registered source identity")
+	}
 	store, err := s.live(ctx)
 	if err != nil {
 		return reg, err
@@ -271,6 +292,9 @@ func (s *Service) snapshotRegistration(ctx context.Context) (Registration, error
 	reg, err := s.registration(ctx)
 	if err != nil {
 		return reg, err
+	}
+	if s.cfg.Snapshots.Format == "tar" {
+		return reg, nil
 	}
 	if reg.RepositoryID == "" {
 		return reg, errors.New("Snapshots repository is not bound; enable snapshots and run init explicitly")
@@ -442,7 +466,7 @@ func (s *Service) prune(ctx context.Context) error {
 	if err := readJSON(s.statePath("status.json"), &status); err != nil {
 		return fmt.Errorf("retention requires a successful backup: %w", err)
 	}
-	if status.LastSnapshot.IsZero() || status.SnapshotError != "" {
+	if snapshotFormat(status) != s.cfg.Snapshots.Format || status.LastSnapshot.IsZero() || status.SnapshotError != "" {
 		return errors.New("retention blocked: the last snapshot did not succeed")
 	}
 	return s.retain(ctx)
@@ -457,12 +481,18 @@ func (s *Service) restore(ctx context.Context, args []string) error {
 		return err
 	}
 	if flags.NArg() != 0 || len(*snapshot) < 8 || len(*snapshot) > 64 || !filepath.IsAbs(*target) {
-		return errors.New("restore requires --snapshot HEX_ID (8–64 characters) and --target ABSOLUTE_PATH")
+		return errors.New("restore requires --snapshot ID (8–64 characters) and --target ABSOLUTE_PATH")
 	}
-	*snapshot = strings.ToLower(*snapshot)
-	for _, ch := range *snapshot {
-		if !strings.ContainsRune("0123456789abcdef", ch) {
-			return errors.New("snapshot must be a hexadecimal ID, not latest")
+	if s.cfg.Snapshots.Format == "tar" {
+		if !validArchiveID(*snapshot) {
+			return errors.New("snapshot must be the exact .tar.gz filename returned by snapshots")
+		}
+	} else {
+		*snapshot = strings.ToLower(*snapshot)
+		for _, ch := range *snapshot {
+			if !strings.ContainsRune("0123456789abcdef", ch) {
+				return errors.New("snapshot must be a hexadecimal ID, not latest")
+			}
 		}
 	}
 	unlock, err := lockState(s.cfg.StateDir)
@@ -470,6 +500,9 @@ func (s *Service) restore(ctx context.Context, args []string) error {
 		return err
 	}
 	defer unlock()
+	if err := s.cleanupTransfers(); err != nil {
+		return err
+	}
 	reg, err := s.snapshotRegistration(ctx)
 	if err != nil {
 		return err
@@ -503,6 +536,9 @@ func (s *Service) restore(ctx context.Context, args []string) error {
 	}
 	if len(entries) != 0 {
 		return errors.New("restore target is not empty")
+	}
+	if s.cfg.Snapshots.Format == "tar" {
+		return s.restoreTar(ctx, reg, *snapshot, dest)
 	}
 	var b bytes.Buffer
 	if err := s.restic(ctx, &b, "snapshots", "--json", "--tag", s.tag(), *snapshot); err != nil {

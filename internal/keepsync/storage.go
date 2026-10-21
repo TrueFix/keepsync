@@ -28,6 +28,7 @@ type Status struct {
 	SnapshotAttempt time.Time `json:"snapshot_attempt,omitempty"`
 	LastSnapshot    time.Time `json:"last_snapshot,omitempty"`
 	SnapshotID      string    `json:"snapshot_id,omitempty"`
+	SnapshotFormat  string    `json:"snapshot_format,omitempty"`
 	SnapshotError   string    `json:"snapshot_error,omitempty"`
 }
 

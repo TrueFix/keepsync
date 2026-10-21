@@ -280,7 +280,7 @@ func (s *Service) snapshotDeadline(now time.Time) time.Time {
 		return time.Time{}
 	}
 	var status Status
-	if err := readJSON(s.statePath("status.json"), &status); err != nil || status.LastSnapshot.IsZero() || status.SnapshotError != "" {
+	if err := readJSON(s.statePath("status.json"), &status); err != nil || snapshotFormat(status) != s.cfg.Snapshots.Format || status.LastSnapshot.IsZero() || status.SnapshotError != "" {
 		return now
 	}
 	return status.LastSnapshot.Add(duration(s.cfg.Snapshots.Interval))

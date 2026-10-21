@@ -49,6 +49,9 @@ func fingerprint(r io.Reader) (fileEntry, error) {
 }
 
 func (s *Service) excluded(rel string, dir bool) bool {
+	if rel == "." {
+		return false
+	}
 	if rel == markerName {
 		return true
 	}
@@ -128,14 +131,8 @@ func (s *Service) backupChanges(ctx context.Context) error {
 }
 
 func (s *Service) backupSelection(ctx context.Context, scopes []string) (result error) {
-	stale, err := filepath.Glob(s.statePath(".stage-*"))
-	if err != nil {
+	if err := s.cleanupTransfers(); err != nil {
 		return err
-	}
-	for _, p := range stale {
-		if err := os.Remove(p); err != nil {
-			return fmt.Errorf("remove interrupted upload staging file: %w", err)
-		}
 	}
 	var status Status
 	if err := readJSON(s.statePath("status.json"), &status); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -332,5 +329,20 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 		}
 	}
 	s.log.Info("Live backup complete", "uploaded_files", uploaded, "uploaded_bytes", total, "duration", time.Since(started).Round(time.Millisecond))
+	return nil
+}
+
+func (s *Service) cleanupTransfers() error {
+	for _, pattern := range []string{".stage-*", ".archive-*"} {
+		stale, err := filepath.Glob(s.statePath(pattern))
+		if err != nil {
+			return err
+		}
+		for _, p := range stale {
+			if err := os.Remove(p); err != nil {
+				return fmt.Errorf("remove interrupted transfer file: %w", err)
+			}
+		}
+	}
 	return nil
 }

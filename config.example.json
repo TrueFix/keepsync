@@ -18,6 +18,7 @@
   "excludes": ["**/.cache/**", "**/node_modules/**"],
   "snapshots": {
     "enabled": false,
+    "format": "restic",
     "interval": "24h",
     "keep_last": 7
   }

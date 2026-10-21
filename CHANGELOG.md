@@ -2,6 +2,20 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.3.0 — 2026-10-21
+
+### Added
+
+- Optional `tar` snapshots: portable, unencrypted `.tar.gz` archives with source metadata and count-based retention.
+- TAR integrity checking and isolated recovery with checksum, identity, and path validation.
+- A minimal Live + TAR/30-minute Compose example and a separate encrypted advanced configuration.
+- Password setup and recovery instructions, including recovery without local state.
+
+### Compatibility
+
+- `restic` remains the default snapshot format; existing encrypted repositories and registrations remain usable.
+- TAR history is stored in a separate `Snapshots/tar/<dataset>/<source-id>/` prefix, with independent retention.
+
 ## 0.2.0 — 2026-10-20
 
 ### Changed

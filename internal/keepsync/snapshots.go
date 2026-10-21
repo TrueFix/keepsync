@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+func snapshotFormat(status Status) string {
+	if status.SnapshotFormat == "" {
+		return "restic"
+	}
+	return status.SnapshotFormat
+}
+
 func (s *Service) snapshotDue(now time.Time) bool {
 	if !s.cfg.Snapshots.Enabled {
 		return false
@@ -17,7 +24,7 @@ func (s *Service) snapshotDue(now time.Time) bool {
 	if err := readJSON(s.statePath("status.json"), &status); err != nil {
 		return true
 	}
-	return status.SnapshotError != "" || status.LastSnapshot.IsZero() || now.Sub(status.LastSnapshot) >= duration(s.cfg.Snapshots.Interval)
+	return snapshotFormat(status) != s.cfg.Snapshots.Format || status.SnapshotError != "" || status.LastSnapshot.IsZero() || now.Sub(status.LastSnapshot) >= duration(s.cfg.Snapshots.Interval)
 }
 
 func (s *Service) snapshot(ctx context.Context) (result error) {
@@ -43,8 +50,27 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	if _, err := s.snapshotRegistration(ctx); err != nil {
+	reg, err := s.snapshotRegistration(ctx)
+	if err != nil {
 		return err
+	}
+	if s.cfg.Snapshots.Format == "tar" {
+		record, err := s.createTarSnapshot(ctx, source, reg)
+		if err != nil {
+			return err
+		}
+		status.LastSnapshot = time.Now().UTC()
+		status.SnapshotID = record.ID
+		status.SnapshotFormat = "tar"
+		status.SnapshotError = ""
+		if err := writeJSON(s.statePath("status.json"), status); err != nil {
+			return err
+		}
+		s.log.Info("Snapshot saved", "format", "tar", "snapshot", record.ID, "bytes", record.Size)
+		if err := s.retainTar(ctx, reg, record.ID); err != nil {
+			return fmt.Errorf("archive saved but retention failed: %w", err)
+		}
+		return nil
 	}
 	// Preserve the source identity in encrypted history so an explicit recovery
 	// can resume against the same Live target after replacing a lost disk.
@@ -82,6 +108,7 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 	summary.SnapshotID = promoted.changed.NewSnapshotID
 	status.LastSnapshot = time.Now().UTC()
 	status.SnapshotID = summary.SnapshotID
+	status.SnapshotFormat = "restic"
 	status.SnapshotError = ""
 	if err := writeJSON(s.statePath("status.json"), status); err != nil {
 		return err
@@ -94,6 +121,17 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 }
 
 func (s *Service) retain(ctx context.Context) error {
+	if s.cfg.Snapshots.Format == "tar" {
+		reg, err := s.registration(ctx)
+		if err != nil {
+			return err
+		}
+		var status Status
+		if err := readJSON(s.statePath("status.json"), &status); err != nil {
+			return err
+		}
+		return s.retainTar(ctx, reg, status.SnapshotID)
+	}
 	if err := s.restic(ctx, io.Discard, "forget", "--prune", "--tag", s.tag(), "--group-by", "tags", "--keep-last", fmt.Sprint(s.cfg.Snapshots.KeepLast)); err != nil {
 		return err
 	}

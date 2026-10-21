@@ -1,6 +1,6 @@
 services:
   keepsync:
-    image: mayankfawkes/keepsync:${KEEPSYNC_VERSION:-0.2.0}
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.0}
     restart: unless-stopped
     cpus: ${KEEPSYNC_CPUS:-0.5}
     mem_limit: ${KEEPSYNC_MEMORY_LIMIT:-256m}
@@ -15,8 +15,9 @@ services:
       KEEPSYNC_INTERVAL: ${KEEPSYNC_INTERVAL:-1h}
       KEEPSYNC_DEBOUNCE: ${KEEPSYNC_DEBOUNCE:-30s}
       KEEPSYNC_MAX_WAIT: ${KEEPSYNC_MAX_WAIT:-5m}
-      KEEPSYNC_SNAPSHOTS_ENABLED: ${KEEPSYNC_SNAPSHOTS_ENABLED:-false}
-      KEEPSYNC_SNAPSHOT_INTERVAL: ${KEEPSYNC_SNAPSHOT_INTERVAL:-24h}
+      KEEPSYNC_SNAPSHOTS_ENABLED: ${KEEPSYNC_SNAPSHOTS_ENABLED:-true}
+      KEEPSYNC_SNAPSHOT_FORMAT: tar
+      KEEPSYNC_SNAPSHOT_INTERVAL: ${KEEPSYNC_SNAPSHOT_INTERVAL:-30m}
       KEEPSYNC_SNAPSHOT_RETAIN: ${KEEPSYNC_SNAPSHOT_RETAIN:-7}
       KEEPSYNC_LOG_FORMAT: ${KEEPSYNC_LOG_FORMAT:-text}
       KEEPSYNC_LOG_FILES: ${KEEPSYNC_LOG_FILES:-true}
@@ -33,17 +34,9 @@ services:
         bind:
           create_host_path: false
       - state:/var/lib/keepsync
-      - cache:/cache
-    secrets:
-      - restic_password
     tmpfs:
       - /tmp:mode=1777,size=16m
     stop_grace_period: 1m
 
-secrets:
-  restic_password:
-    file: ./secrets/restic_password
-
 volumes:
   state:
-  cache:

@@ -1,0 +1,72 @@
+# Complete encrypted configuration. Use this file on its own, not as an override.
+services:
+  keepsync:
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.0}
+    restart: unless-stopped
+    read_only: true
+    cpus: ${KEEPSYNC_CPUS:-0.5}
+    mem_limit: ${KEEPSYNC_MEMORY_LIMIT:-256m}
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      KEEPSYNC_TARGET: ${KEEPSYNC_TARGET:?Set KEEPSYNC_TARGET to s3://bucket/prefix}
+      KEEPSYNC_DATASET: ${KEEPSYNC_DATASET:-files}
+      KEEPSYNC_METHOD: ${KEEPSYNC_METHOD:-live}
+      KEEPSYNC_INTERVAL: ${KEEPSYNC_INTERVAL:-1h}
+      KEEPSYNC_DEBOUNCE: ${KEEPSYNC_DEBOUNCE:-30s}
+      KEEPSYNC_MAX_WAIT: ${KEEPSYNC_MAX_WAIT:-5m}
+      KEEPSYNC_MAX_WATCHES: ${KEEPSYNC_MAX_WATCHES:-8192}
+      KEEPSYNC_SNAPSHOTS_ENABLED: "true"
+      KEEPSYNC_SNAPSHOT_FORMAT: restic
+      KEEPSYNC_SNAPSHOT_INTERVAL: ${KEEPSYNC_SNAPSHOT_INTERVAL:-24h}
+      KEEPSYNC_SNAPSHOT_RETAIN: ${KEEPSYNC_SNAPSHOT_RETAIN:-14}
+      KEEPSYNC_PASSWORD_FILE: /run/secrets/restic_password
+      KEEPSYNC_EXCLUDES: '${KEEPSYNC_EXCLUDES:-["**/.cache/**","**/node_modules/**"]}'
+      KEEPSYNC_DELETE_REMOTE: ${KEEPSYNC_DELETE_REMOTE:-false}
+      KEEPSYNC_S3_ENDPOINT: ${KEEPSYNC_S3_ENDPOINT:-}
+      KEEPSYNC_LOG_FORMAT: ${KEEPSYNC_LOG_FORMAT:-json}
+      KEEPSYNC_LOG_LEVEL: ${KEEPSYNC_LOG_LEVEL:-info}
+      KEEPSYNC_LOG_FILES: ${KEEPSYNC_LOG_FILES:-true}
+      GOMAXPROCS: "1"
+      GOMEMLIMIT: ${KEEPSYNC_GO_MEMORY_LIMIT:-64MiB}
+      KEEPSYNC_SNAPSHOT_MEMORY_LIMIT: ${KEEPSYNC_SNAPSHOT_MEMORY_LIMIT:-128MiB}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - type: bind
+        source: ${KEEPSYNC_SOURCE:-./data}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - state:/var/lib/keepsync
+      - cache:/cache
+    secrets:
+      - restic_password
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    stop_grace_period: 1m
+
+  register:
+    profiles: [setup]
+    extends: keepsync
+    restart: "no"
+    command: [register-source]
+    volumes:
+      - type: bind
+        source: ${KEEPSYNC_SOURCE:-./data}
+        target: /data
+        read_only: false
+        bind:
+          create_host_path: false
+
+secrets:
+  restic_password:
+    file: ./secrets/restic_password
+
+volumes:
+  state:
+  cache:
