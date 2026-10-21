@@ -22,6 +22,8 @@ type changeSet struct {
 	full  bool
 }
 
+func (c *changeSet) any() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.full || len(c.paths) > 0 }
+
 func (c *changeSet) add(rel string, full bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -69,10 +71,14 @@ func (c *changeSet) take() ([]string, bool) {
 }
 
 func (s *Service) watch(ctx context.Context, changed chan<- time.Time, ready chan<- struct{}) {
+	if s.cfg.WatchMode == "poll" || (s.cfg.WatchMode == "auto" && pollingPreferred(s.cfg.Source)) {
+		s.pollWatch(ctx, changed, ready)
+		return
+	}
 	w, err := fsnotify.NewBufferedWatcher(1024)
 	if err != nil {
-		close(ready)
-		s.log.Error("Watcher unavailable; interval reconciliation remains active", "error", err)
+		s.log.Warn("Native watcher unavailable; using metadata polling", "error", err)
+		s.pollWatch(ctx, changed, ready)
 		return
 	}
 	defer w.Close()
@@ -88,7 +94,7 @@ func (s *Service) watch(ctx context.Context, changed chan<- time.Time, ready cha
 		root = filepath.Clean(s.cfg.Source)
 	}
 	watched := make(map[string]bool)
-	limited, warned := false, false
+	limited := false
 	addTree := func(start string) error {
 		return walkTree(ctx, start, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -118,11 +124,16 @@ func (s *Service) watch(ctx context.Context, changed chan<- time.Time, ready cha
 		})
 	}
 	if err := addTree(root); err != nil {
-		s.log.Warn("Watcher registration incomplete; interval reconciliation remains active", "error", err)
+		s.log.Warn("Native watch incomplete; using metadata polling", "error", err)
+		w.Close()
+		s.pollWatch(ctx, changed, ready)
+		return
 	}
 	if limited {
-		s.log.Warn("Watch limit reached; remaining directories use interval reconciliation", "max_watches", s.cfg.MaxWatches)
-		warned = true
+		s.log.Warn("Watch limit reached; using metadata polling", "max_watches", s.cfg.MaxWatches)
+		w.Close()
+		s.pollWatch(ctx, changed, ready)
+		return
 	}
 	rootInfo, _ := os.Stat(root)
 	close(ready)
@@ -159,14 +170,19 @@ func (s *Service) watch(ctx context.Context, changed chan<- time.Time, ready cha
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Lstat(event.Name); err == nil && info.IsDir() {
 					if err := addTree(event.Name); err != nil {
-						s.log.Warn("Cannot watch new directory; requesting full reconciliation", "error", err)
+						s.log.Warn("Cannot watch new directory; using metadata polling", "error", err)
 						notify(".", true)
+						w.Close()
+						s.pollWatch(ctx, changed, make(chan struct{}))
+						return
 					}
 				}
 			}
-			if limited && !warned {
-				s.log.Warn("Watch limit reached; remaining directories use interval reconciliation", "max_watches", s.cfg.MaxWatches)
-				warned = true
+			if limited {
+				s.log.Warn("Watch limit reached; using metadata polling", "max_watches", s.cfg.MaxWatches)
+				w.Close()
+				s.pollWatch(ctx, changed, make(chan struct{}))
+				return
 			}
 			if s.cfg.LogLevel == "debug" {
 				s.log.Debug("Filesystem change", "path", rel, "operation", event.Op.String())
@@ -262,9 +278,9 @@ func (s *Service) serve(parent context.Context) error {
 	case <-ctx.Done():
 		return nil
 	}
-	s.log.Info("KeepSync started", "method", s.cfg.Method, "source", s.cfg.Source, "interval", s.cfg.Interval, "snapshots", s.cfg.Snapshots.Enabled)
+	s.log.Info("KeepSync started", "method", s.cfg.Method, "source", s.cfg.Source, "debounce", s.cfg.Debounce, "interval", s.cfg.Interval, "snapshots", s.cfg.Snapshots.Enabled)
 	return s.runLoop(ctx, changes, func(ctx context.Context, command string) error {
-		unlock, err := lockState(s.cfg.StateDir)
+		unlock, err := lockStateContext(ctx, s.cfg.StateDir)
 		if err != nil {
 			return err
 		}
@@ -400,8 +416,15 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 			wait := duration(s.cfg.Interval)
 			if result.err != nil {
 				wait = min(wait, time.Minute)
-				if errors.Is(result.err, errSourceEmpty) {
-					s.log.Info("Waiting for source files", "source", s.cfg.Source, "retry_in", wait)
+				if errors.Is(result.err, errFileBusy) {
+					wait = duration(s.cfg.Debounce)
+					s.log.Debug("Waiting for file writes", "retry_in", wait)
+				} else if errors.Is(result.err, errSourceEmpty) {
+					if !waitingForData {
+						s.log.Info("Waiting for source files", "source", s.cfg.Source, "retry_in", wait)
+					} else {
+						s.log.Debug("Waiting for source files", "source", s.cfg.Source, "retry_in", wait)
+					}
 				} else {
 					s.log.Error("Operation failed; retry scheduled", "operation", result.command, "error", result.err, "retry_in", wait)
 				}
@@ -427,15 +450,26 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 					nextBackup = time.Now().Add(wait)
 				}
 				if result.err != nil {
-					retry = time.Now().Add(wait)
-					nextBackup = retry
-					if errors.Is(result.err, errSourceEmpty) {
+					if errors.Is(result.err, errFileBusy) && s.cfg.Method == "live" {
 						retry = time.Time{}
+						dirty.changed(time.Now())
+						if result.command == "backup" {
+							nextBackup = time.Now().Add(duration(s.cfg.Interval))
+						}
+					} else {
+						retry = time.Now().Add(wait)
+						nextBackup = retry
+						if errors.Is(result.err, errSourceEmpty) {
+							retry = time.Time{}
+						}
+						pendingBackup = false
+						pendingChanges = false
 					}
-					pendingBackup = false
-					pendingChanges = false
 				} else {
 					retry = time.Time{}
+					if s.cfg.Method == "live" && s.pending.any() {
+						dirty.changed(time.Now())
+					}
 				}
 			}
 		}

@@ -95,6 +95,8 @@ func TestSnapshotsRunWithoutLiveChanges(t *testing.T) {
 	c.Method = "interval"
 	c.Interval = "1h"
 	c.Snapshots = SnapshotConfig{Enabled: true, Format: "restic", Interval: "1s", KeepLast: 2}
+	c.LogFormat = "json"
+	c.LogLevel = "debug"
 	var logs safeLog
 	s := New(c, &logs, io.Discard)
 	if err := os.WriteFile(filepath.Join(c.Source, "file"), []byte("unchanged"), 0600); err != nil {

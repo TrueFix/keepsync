@@ -148,6 +148,7 @@ func TestComposeStyleStartupWaitsForFilesAndCreatesTar(t *testing.T) {
 	c.Debounce = "1s"
 	c.MaxWait = "1s"
 	c.Snapshots = SnapshotConfig{Enabled: true, Format: "tar", Interval: "30m", KeepLast: 7}
+	c.LogFormat = "json"
 	var logs safeLog
 	s := New(c, &logs, io.Discard)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,7 +173,7 @@ func TestComposeStyleStartupWaitsForFilesAndCreatesTar(t *testing.T) {
 		var status Status
 		return readJSON(s.statePath("status.json"), &status) == nil && !status.LastSuccess.IsZero() && status.LastSnapshot.IsZero() == false && status.SnapshotFormat == "tar" && status.SnapshotError == ""
 	})
-	if logs.count("level=ERROR") != 0 {
+	if logs.count(`"level":"ERROR"`) != 0 {
 		t.Fatal("ordinary first startup logged an operation error")
 	}
 	if _, err := os.Stat(filepath.Join(c.Source, markerName)); !os.IsNotExist(err) {

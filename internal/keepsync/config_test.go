@@ -1,9 +1,12 @@
 package keepsync
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func testConfig(t *testing.T) Config {
@@ -34,6 +37,37 @@ func testConfig(t *testing.T) Config {
 	return c
 }
 
+func TestBackgroundLockWaitsAndCancels(t *testing.T) {
+	dir := t.TempDir()
+	unlock, err := lockState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if release, err := lockStateContext(ctx, dir); err == nil {
+		release()
+		t.Fatal("cancelled lock unexpectedly acquired")
+	} else if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		release, err := lockStateContext(ctx, dir)
+		if err == nil {
+			release()
+		}
+		done <- err
+	}()
+	time.Sleep(40 * time.Millisecond)
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal("background worker treated brief lock contention as failure:", err)
+	}
+}
+
 func TestConfigRejectsUnsafeValues(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -53,6 +87,8 @@ func TestConfigRejectsUnsafeValues(t *testing.T) {
 		{"max wait shorter than debounce", func(c *Config) { c.MaxWait = "1s" }},
 		{"invalid snapshot interval", func(c *Config) { c.Snapshots.Interval = "0s" }},
 		{"invalid watch limit", func(c *Config) { c.MaxWatches = 0 }},
+		{"invalid watch mode", func(c *Config) { c.WatchMode = "broken" }},
+		{"invalid poll interval", func(c *Config) { c.WatchInterval = "0s" }},
 		{"unknown snapshot format", func(c *Config) { c.Snapshots.Format = "zip" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

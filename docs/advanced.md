@@ -3,7 +3,7 @@
 The README's configuration uses portable, unencrypted TAR snapshots every 30
 minutes. This guide covers encrypted snapshots and additional controls.
 
-The examples use `mayankfawkes/keepsync:0.3.2`. To test a local build instead, run
+The examples use `mayankfawkes/keepsync:0.3.3`. To test a local build instead, run
 `make image VERSION=dev` and set `KEEPSYNC_IMAGE=keepsync:test`.
 
 ## Encrypted Restic configuration
@@ -156,9 +156,11 @@ metadata preservation is required.
 | `KEEPSYNC_SOURCE_PATH` | `/data` | Source path inside the container |
 | `KEEPSYNC_METHOD` | `interval` | `live` or `interval` |
 | `KEEPSYNC_INTERVAL` | `1h` | Full reconciliation interval; fallback in Live mode |
-| `KEEPSYNC_DEBOUNCE` | `30s` | Quiet period before processing changes |
-| `KEEPSYNC_MAX_WAIT` | `5m` | Maximum batching delay during continuous changes |
-| `KEEPSYNC_MAX_WATCHES` | `8192` | Directory-watch limit; other directories use reconciliation |
+| `KEEPSYNC_DEBOUNCE` | `2s` | Quiet period before processing changes |
+| `KEEPSYNC_MAX_WAIT` | `30s` | Maximum batching delay during continuous changes |
+| `KEEPSYNC_WATCH_MODE` | `auto` | Native events normally; polling on network/FUSE/9P volumes. Override with `native` or `poll`. |
+| `KEEPSYNC_WATCH_INTERVAL` | `5s` | Metadata polling interval when polling is selected |
+| `KEEPSYNC_MAX_WATCHES` | `8192` | Directory-watch limit; switches to metadata polling if reached |
 | `KEEPSYNC_SNAPSHOTS_ENABLED` | `false` | Enable scheduled recovery points |
 | `KEEPSYNC_SNAPSHOT_FORMAT` | `restic` | `tar` for portable archives, `restic` for encryption/deduplication |
 | `KEEPSYNC_SNAPSHOT_INTERVAL` | `24h` | Delay after the last successful snapshot completes |
@@ -172,6 +174,14 @@ metadata preservation is required.
 | `KEEPSYNC_LOG_FORMAT` | `text` | `text` or `json` |
 | `KEEPSYNC_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `KEEPSYNC_LOG_FILES` | `true` | Log each confirmed Live upload |
+| `KEEPSYNC_LOG_COLOR` | `true` | Color compact text logs; `NO_COLOR` also disables color. JSON never contains ANSI. |
+
+The watcher processes create/edit/rename/remove events recursively. A tracked
+delete can be handled even when it removes the final file; an empty full scan
+still does not sweep remote objects. With `KEEPSYNC_DELETE_REMOTE=false`, deletion
+is detected and logged as kept on S3. To mirror tracked deletions, enable it.
+In polling mode, only size/time/inode metadata is scanned; unchanged file data is
+not repeatedly read. The poller skips scans while an upload/snapshot is active.
 
 Runtime defaults and example limits are distinct: both Compose examples select
 Live mode explicitly. The minimal file selects TAR/30m/7; the advanced file selects

@@ -2,6 +2,20 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.3.3 — 2026-10-21
+
+### Fixed
+
+- Detect and process tracked deletes even when the source becomes empty, while retaining the empty full-scan safeguard.
+- Shorten Live-mode batching to a 2-second quiet period and 30-second maximum; keep both configurable.
+- Add metadata polling for network/FUSE/9P mounts and an explicit watch-mode override.
+- Retry files that change during staging promptly without delaying unrelated uploads behind a global one-minute backoff.
+
+### Changed
+
+- Replace verbose text fields with compact colored WATCH/ADD/EDIT/DEL/SNAP/ERROR lines; retain structured JSON and opt-out color controls.
+- Hide routine scan and no-op retention messages at normal log level.
+
 ## 0.3.2 — 2026-10-21
 
 ### Changed

@@ -1,6 +1,7 @@
 package keepsync
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,28 @@ func writeJSON(path string, v any) error {
 // State must be on a local filesystem that supports flock, not an object mount.
 func lockState(dir string) (func(), error) {
 	return lockNamed(dir, "operation.lock")
+}
+
+func lockStateContext(ctx context.Context, dir string) (func(), error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		unlock, err := lockState(dir)
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return nil, err
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func lockNamed(dir, name string) (func(), error) {

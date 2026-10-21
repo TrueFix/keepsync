@@ -57,7 +57,7 @@ func (s *Service) createTarSnapshot(ctx context.Context, source string, reg Regi
 		return archiveRecord{}, err
 	}
 	defer func() { f.Close(); os.Remove(f.Name()) }()
-	s.log.Info("Snapshot started", "format", "tar", "snapshot", id)
+	s.log.Debug("Snapshot started", "format", "tar", "snapshot", id)
 	hash := sha256.New()
 	gz, err := gzip.NewWriterLevel(io.MultiWriter(f, hash), gzip.BestSpeed)
 	if err != nil {
@@ -272,6 +272,7 @@ func (s *Service) retainTar(ctx context.Context, reg Registration, protected str
 	}
 	// Keep the just-confirmed point even if the source machine's clock moved back.
 	remaining := s.cfg.Snapshots.KeepLast - 1
+	removed := 0
 	for _, record := range records {
 		if record.ID == protected {
 			continue
@@ -283,8 +284,13 @@ func (s *Service) retainTar(ctx context.Context, reg Registration, protected str
 		if err := store.ArchiveDelete(ctx, scope, record.ID); err != nil {
 			return err
 		}
+		removed++
 	}
-	s.log.Info("Snapshot retention complete", "format", "tar", "keep_last", s.cfg.Snapshots.KeepLast)
+	if removed > 0 {
+		s.log.Info("Snapshot retention complete", "format", "tar", "removed", removed, "keep_last", s.cfg.Snapshots.KeepLast)
+	} else {
+		s.log.Debug("Snapshot retention complete", "format", "tar", "removed", 0, "keep_last", s.cfg.Snapshots.KeepLast)
+	}
 	return nil
 }
 

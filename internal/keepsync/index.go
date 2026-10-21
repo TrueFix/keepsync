@@ -15,6 +15,22 @@ type liveIndex struct {
 	touches map[string]fileEntry
 }
 
+func (i *liveIndex) each(visit func(string, fileEntry) error) error {
+	return i.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(filesBucket).ForEach(func(key, raw []byte) error {
+			rel := string(key)
+			if !validRelativeFile(rel) {
+				return errors.New("invalid path in persisted Live index")
+			}
+			var entry fileEntry
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return err
+			}
+			return visit(rel, entry)
+		})
+	})
+}
+
 var filesBucket = []byte("files")
 var metaBucket = []byte("meta")
 

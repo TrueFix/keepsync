@@ -28,6 +28,7 @@ run() {
 start() {
   cid="$(docker run -d --read-only --tmpfs /tmp:mode=1777 --tmpfs /cache:mode=1777 \
     -e KEEPSYNC_DATASET=smoke -e KEEPSYNC_TARGET=/repo -e KEEPSYNC_METHOD=live \
+    -e KEEPSYNC_DEBOUNCE=1s -e KEEPSYNC_MAX_WAIT=2s -e KEEPSYNC_DELETE_REMOTE=true \
     -e KEEPSYNC_SNAPSHOTS_ENABLED=true -e KEEPSYNC_SNAPSHOT_FORMAT=tar \
     -v "$root/data:/data:ro" -v "$root/state:/var/lib/keepsync" -v "$root/repo:/repo" \
     "$image")"
@@ -54,6 +55,31 @@ wait_ready() {
 }
 start
 wait_ready
+# Writes by another container must reach the read-only sidecar mount.
+has_content() {
+  docker run --rm --entrypoint sh -v "$root:/work" "$helper" -ec \
+    'test "$(cat "/work/repo/Live/$1")" = "$2"' _ "$1" "$2"
+}
+wait_content() {
+  for _ in {1..30}; do
+    if has_content "$1" "$2" 2>/dev/null; then return; fi
+    sleep 1
+  done
+  docker logs "$cid"
+  return 1
+}
+docker run --rm --entrypoint sh -v "$root:/work" "$helper" -ec 'printf "edited live\n" > /work/data/example.txt; mkdir -p /work/data/new/deep; printf "created live\n" > /work/data/new/deep/file.txt'
+wait_content example.txt 'edited live'
+wait_content new/deep/file.txt 'created live'
+docker run --rm --entrypoint sh -v "$root:/work" "$helper" -ec 'mv /work/data/new/deep/file.txt /work/data/new/deep/renamed.txt; printf "nested edit\n" > /work/data/new/deep/renamed.txt'
+wait_content new/deep/renamed.txt 'nested edit'
+docker run --rm --entrypoint sh -v "$root:/work" "$helper" -ec 'rm -rf /work/data/new'
+deleted=false
+for _ in {1..30}; do
+  if docker run --rm --entrypoint sh -v "$root:/work" "$helper" -ec 'test ! -e /work/repo/Live/new/deep/renamed.txt'; then deleted=true; break; fi
+  sleep 1
+done
+test "$deleted" = true
 previous_success="$(docker exec "$cid" /usr/local/bin/keepsync status | python3 -c 'import json,sys; print(json.load(sys.stdin)["last_success"])')"
 docker stop "$cid"
 docker rm "$cid"

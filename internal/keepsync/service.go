@@ -39,7 +39,7 @@ func New(c Config, out, stderr io.Writer) *Service {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(c.LogLevel))
 	opts := &slog.HandlerOptions{Level: level}
-	var h slog.Handler = slog.NewTextHandler(out, opts)
+	var h slog.Handler = newCompactHandler(out, c, level)
 	if c.LogFormat == "json" {
 		h = slog.NewJSONHandler(out, opts)
 	}
@@ -408,6 +408,17 @@ func hasFilesContext(ctx context.Context, source string) error {
 }
 
 func (s *Service) source(ctx context.Context) (string, error) {
+	source, err := s.sourceIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := s.hasSourceFiles(ctx, source); err != nil {
+		return "", err
+	}
+	return source, nil
+}
+
+func (s *Service) sourceIdentity(ctx context.Context) (string, error) {
 	reg, err := s.registration(ctx)
 	if err != nil {
 		return "", err
@@ -449,9 +460,6 @@ func (s *Service) source(ctx context.Context) (string, error) {
 			return "", err
 		}
 	} else if err := checkSourceMarker(source, reg.SourceID); err != nil {
-		return "", err
-	}
-	if err := s.hasSourceFiles(ctx, source); err != nil {
 		return "", err
 	}
 	return source, nil

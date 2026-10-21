@@ -83,7 +83,7 @@ func (s *Service) snapshot(ctx context.Context) (result error) {
 		args = append(args, "--exclude", exclude)
 	}
 	args = append(args, "--", source)
-	s.log.Info("Snapshot started")
+	s.log.Debug("Snapshot started", "format", "restic")
 	var out snapshotOutput
 	if err := s.restic(ctx, &out, args...); err != nil {
 		return err
@@ -138,6 +138,6 @@ func (s *Service) retain(ctx context.Context) error {
 	if err := s.restic(ctx, io.Discard, "forget", "--prune", "--tag", s.tag(), "--group-by", "", "--keep-last", fmt.Sprint(s.cfg.Snapshots.KeepLast)); err != nil {
 		return err
 	}
-	s.log.Info("Snapshot retention complete", "keep_last", s.cfg.Snapshots.KeepLast)
+	s.log.Debug("Snapshot retention complete", "keep_last", s.cfg.Snapshots.KeepLast)
 	return nil
 }

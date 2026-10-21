@@ -1,7 +1,7 @@
 # Complete encrypted configuration. Use this file on its own, not as an override.
 services:
   keepsync:
-    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.2}
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.3}
     restart: unless-stopped
     read_only: true
     cpus: ${KEEPSYNC_CPUS:-0.5}
@@ -14,8 +14,10 @@ services:
       KEEPSYNC_DATASET: ${KEEPSYNC_DATASET:-files}
       KEEPSYNC_METHOD: ${KEEPSYNC_METHOD:-live}
       KEEPSYNC_INTERVAL: ${KEEPSYNC_INTERVAL:-1h}
-      KEEPSYNC_DEBOUNCE: ${KEEPSYNC_DEBOUNCE:-30s}
-      KEEPSYNC_MAX_WAIT: ${KEEPSYNC_MAX_WAIT:-5m}
+      KEEPSYNC_DEBOUNCE: ${KEEPSYNC_DEBOUNCE:-2s}
+      KEEPSYNC_MAX_WAIT: ${KEEPSYNC_MAX_WAIT:-30s}
+      KEEPSYNC_WATCH_MODE: ${KEEPSYNC_WATCH_MODE:-auto}
+      KEEPSYNC_WATCH_INTERVAL: ${KEEPSYNC_WATCH_INTERVAL:-5s}
       KEEPSYNC_MAX_WATCHES: ${KEEPSYNC_MAX_WATCHES:-8192}
       KEEPSYNC_SNAPSHOTS_ENABLED: "true"
       KEEPSYNC_SNAPSHOT_FORMAT: restic
@@ -28,6 +30,8 @@ services:
       KEEPSYNC_LOG_FORMAT: ${KEEPSYNC_LOG_FORMAT:-json}
       KEEPSYNC_LOG_LEVEL: ${KEEPSYNC_LOG_LEVEL:-info}
       KEEPSYNC_LOG_FILES: ${KEEPSYNC_LOG_FILES:-true}
+      KEEPSYNC_LOG_COLOR: ${KEEPSYNC_LOG_COLOR:-true}
+      NO_COLOR: ${NO_COLOR:-}
       GOMAXPROCS: "1"
       GOMEMLIMIT: ${KEEPSYNC_GO_MEMORY_LIMIT:-64MiB}
       KEEPSYNC_SNAPSHOT_MEMORY_LIMIT: ${KEEPSYNC_SNAPSHOT_MEMORY_LIMIT:-128MiB}

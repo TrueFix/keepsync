@@ -27,6 +27,8 @@ type fileEntry struct {
 	Generation uint64 `json:"generation"`
 }
 
+var errFileBusy = errors.New("source file is still changing")
+
 func validRelativeFile(rel string) bool {
 	return rel != "" && rel != "." && rel != markerName && !strings.HasPrefix(rel, "/") && !strings.ContainsAny(rel, "\\\x00") && path.Clean(rel) == rel && rel != ".." && !strings.HasPrefix(rel, "../")
 }
@@ -104,7 +106,7 @@ func (s *Service) stage(ctx context.Context, root *os.Root, rel string) (*os.Fil
 	afterCT, _ := fileMetadata(after)
 	if err != nil || !os.SameFile(before, current) || !current.Mode().IsRegular() || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) || beforeCT != afterCT || n != after.Size() {
 		cleanup()
-		return nil, fileEntry{}, fmt.Errorf("file changed while reading %q; retrying on the next attempt", rel)
+		return nil, fileEntry{}, fmt.Errorf("%w: %q", errFileBusy, rel)
 	}
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		cleanup()
@@ -152,9 +154,15 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 		}
 		result = errors.Join(result, writeJSON(s.statePath("status.json"), status))
 	}()
-	source, err := s.source(ctx)
+	fullScan := len(scopes) == 1 && scopes[0] == ""
+	source, err := s.sourceIdentity(ctx)
 	if err != nil {
 		return err
+	}
+	if fullScan {
+		if err := s.hasSourceFiles(ctx, source); err != nil {
+			return err
+		}
 	}
 	store, err := s.live(ctx)
 	if err != nil {
@@ -176,9 +184,11 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 	defer root.Close()
 	seen := 0
 	uploaded := 0
+	removed := 0
+	busy := 0
 	var total int64
 	started := time.Now()
-	s.log.Info("Live backup started")
+	s.log.Debug("Live backup started")
 	visit := func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -213,6 +223,9 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 			return err
 		}
 		info, err := root.Lstat(filepath.FromSlash(rel))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -240,6 +253,20 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 			}
 		}
 		stage, entry, err := s.stage(ctx, root, filepath.FromSlash(rel))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if errors.Is(err, errFileBusy) {
+			busy++
+			s.pending.add(rel, false)
+			if exists {
+				old.Generation = gen
+				if err := index.touch(rel, old); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -293,7 +320,11 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 	}
 	// A final identity/empty-source check prevents a removed mount from becoming
 	// a deletion sweep. Only keys from our persisted index can ever be removed.
-	if _, err := s.source(ctx); err != nil {
+	verify := s.sourceIdentity
+	if fullScan {
+		verify = s.source
+	}
+	if _, err := verify(ctx); err != nil {
 		return err
 	}
 	for _, scope := range scopes {
@@ -326,9 +357,17 @@ func (s *Service) backupSelection(ctx context.Context, scopes []string) (result 
 			if s.cfg.LogFiles {
 				s.log.Info("FILE removed locally", "path", rel, "remote_deleted", s.cfg.DeleteRemote)
 			}
+			removed++
 		}
 	}
-	s.log.Info("Live backup complete", "uploaded_files", uploaded, "uploaded_bytes", total, "duration", time.Since(started).Round(time.Millisecond))
+	if !s.cfg.LogFiles && (uploaded > 0 || removed > 0) {
+		s.log.Info("Live backup complete", "uploaded_files", uploaded, "removed_files", removed, "uploaded_bytes", total, "duration", time.Since(started).Round(time.Millisecond))
+	} else {
+		s.log.Debug("Live backup complete", "uploaded_files", uploaded, "removed_files", removed, "uploaded_bytes", total, "duration", time.Since(started).Round(time.Millisecond))
+	}
+	if busy > 0 {
+		return fmt.Errorf("%w: %d files queued again", errFileBusy, busy)
+	}
 	return nil
 }
 

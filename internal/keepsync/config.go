@@ -22,33 +22,36 @@ type SnapshotConfig struct {
 }
 
 type Config struct {
-	Dataset      string         `json:"dataset"`
-	Source       string         `json:"source"`
-	Repository   string         `json:"repository"`
-	PasswordFile string         `json:"password_file"`
-	StateDir     string         `json:"state_dir"`
-	RestoreRoot  string         `json:"restore_root"`
-	Method       string         `json:"method"`
-	Interval     string         `json:"interval"`
-	Debounce     string         `json:"debounce"`
-	MaxWait      string         `json:"max_wait"`
-	MaxWatches   int            `json:"max_watches"`
-	Restic       string         `json:"restic"`
-	Excludes     []string       `json:"excludes"`
-	DeleteRemote bool           `json:"delete_remote"`
-	S3Endpoint   string         `json:"s3_endpoint"`
-	LogFormat    string         `json:"log_format"`
-	LogLevel     string         `json:"log_level"`
-	LogFiles     bool           `json:"log_files"`
-	Snapshots    SnapshotConfig `json:"snapshots"`
+	Dataset       string         `json:"dataset"`
+	Source        string         `json:"source"`
+	Repository    string         `json:"repository"`
+	PasswordFile  string         `json:"password_file"`
+	StateDir      string         `json:"state_dir"`
+	RestoreRoot   string         `json:"restore_root"`
+	Method        string         `json:"method"`
+	Interval      string         `json:"interval"`
+	Debounce      string         `json:"debounce"`
+	MaxWait       string         `json:"max_wait"`
+	MaxWatches    int            `json:"max_watches"`
+	WatchMode     string         `json:"watch_mode"`
+	WatchInterval string         `json:"watch_interval"`
+	Restic        string         `json:"restic"`
+	Excludes      []string       `json:"excludes"`
+	DeleteRemote  bool           `json:"delete_remote"`
+	S3Endpoint    string         `json:"s3_endpoint"`
+	LogFormat     string         `json:"log_format"`
+	LogLevel      string         `json:"log_level"`
+	LogFiles      bool           `json:"log_files"`
+	LogColor      bool           `json:"log_color"`
+	Snapshots     SnapshotConfig `json:"snapshots"`
 }
 
 func defaultConfig() Config {
 	return Config{
 		Dataset: "files", Source: "/data", PasswordFile: "/run/secrets/restic_password",
 		StateDir: "/var/lib/keepsync", RestoreRoot: "/restore", Method: "interval",
-		Interval: "1h", Debounce: "30s", MaxWait: "5m", MaxWatches: 8192, Restic: "restic",
-		LogFormat: "text", LogLevel: "info", LogFiles: true,
+		Interval: "1h", Debounce: "2s", MaxWait: "30s", MaxWatches: 8192, WatchMode: "auto", WatchInterval: "5s", Restic: "restic",
+		LogFormat: "text", LogLevel: "info", LogFiles: true, LogColor: true,
 		Snapshots: SnapshotConfig{Format: "restic", Interval: "24h", KeepLast: 7},
 	}
 }
@@ -85,6 +88,7 @@ func loadEnvironment() (Config, error) {
 		"KEEPSYNC_LOG_LEVEL": &c.LogLevel, "KEEPSYNC_S3_ENDPOINT": &c.S3Endpoint,
 		"KEEPSYNC_SNAPSHOT_INTERVAL": &c.Snapshots.Interval,
 		"KEEPSYNC_SNAPSHOT_FORMAT":   &c.Snapshots.Format,
+		"KEEPSYNC_WATCH_MODE":        &c.WatchMode, "KEEPSYNC_WATCH_INTERVAL": &c.WatchInterval,
 	} {
 		if v, ok := os.LookupEnv(key); ok {
 			*dest = v
@@ -94,7 +98,7 @@ func loadEnvironment() (Config, error) {
 	if c.Repository == "" {
 		c.Repository = os.Getenv("KEEPSYNC_REPOSITORY")
 	}
-	for key, dest := range map[string]*bool{"KEEPSYNC_SNAPSHOTS_ENABLED": &c.Snapshots.Enabled, "KEEPSYNC_DELETE_REMOTE": &c.DeleteRemote, "KEEPSYNC_LOG_FILES": &c.LogFiles} {
+	for key, dest := range map[string]*bool{"KEEPSYNC_SNAPSHOTS_ENABLED": &c.Snapshots.Enabled, "KEEPSYNC_DELETE_REMOTE": &c.DeleteRemote, "KEEPSYNC_LOG_FILES": &c.LogFiles, "KEEPSYNC_LOG_COLOR": &c.LogColor} {
 		if v, ok := os.LookupEnv(key); ok {
 			parsed, err := strconv.ParseBool(v)
 			if err != nil {
@@ -143,7 +147,7 @@ func (c Config) Validate() error {
 	if c.Method != "interval" && c.Method != "live" {
 		return errors.New("method must be interval or live")
 	}
-	for name, v := range map[string]string{"interval": c.Interval, "debounce": c.Debounce, "max_wait": c.MaxWait, "snapshot interval": c.Snapshots.Interval} {
+	for name, v := range map[string]string{"interval": c.Interval, "debounce": c.Debounce, "max_wait": c.MaxWait, "snapshot interval": c.Snapshots.Interval, "watch_interval": c.WatchInterval} {
 		d, err := time.ParseDuration(v)
 		if err != nil || d < time.Second {
 			return fmt.Errorf("%s must be a duration of at least 1s", name)
@@ -160,6 +164,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxWatches < 1 {
 		return errors.New("max_watches must be at least 1")
+	}
+	if c.WatchMode != "auto" && c.WatchMode != "native" && c.WatchMode != "poll" {
+		return errors.New("watch_mode must be auto, native or poll")
 	}
 	if c.LogFormat != "text" && c.LogFormat != "json" {
 		return errors.New("log_format must be text or json")

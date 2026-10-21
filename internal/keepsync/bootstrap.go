@@ -112,7 +112,7 @@ func (s *Service) ensureSetup(ctx context.Context) error {
 	if err := os.Remove(pending); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	s.log.Info("Source initialized automatically", "source", source, "identity", reg.IdentityMode, "dataset", reg.Dataset)
+	s.log.Debug("Source initialized automatically", "source", source, "identity", reg.IdentityMode, "dataset", reg.Dataset)
 	return nil
 }
 

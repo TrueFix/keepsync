@@ -17,12 +17,12 @@ Mount your files at `/data`. KeepSync uploads changes to `Live/` and saves sched
 
 ## Live + TAR snapshots every 30 minutes
 
-Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`. The flat TAR layout requires `0.3.2` or later.
+Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`.
 
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.3.2
+    image: mayankfawkes/keepsync:0.3.3
     restart: unless-stopped
     read_only: true
     cpus: 0.5
@@ -60,7 +60,9 @@ On the first run, KeepSync initializes its state and binds an unused target auto
 
 Preserve `keepsync-state` across upgrades and use a dedicated target prefix with one active writer. Saved identities are checked on every backup; a missing state volume does not silently claim an existing backup target.
 
-Live changes are batched after 30 seconds of quiet, with a periodic reconciliation every hour. Snapshots run on startup and every 30 minutes after completion. Retention keeps **7 recovery points, not 7 files**, and never cleans up `Live/`. Local deletions stay in `Live/` unless `KEEPSYNC_DELETE_REMOTE=true`.
+Live changes upload after 2 seconds of quiet, or at most 30 seconds of batching during continuous writes. File edits, atomic saves, creates, renames, and deletes are watched recursively. Network/FUSE mounts automatically use a lightweight metadata-polling fallback; set `KEEPSYNC_WATCH_MODE=poll` if your host doesn't deliver filesystem events reliably. A full reconciliation still runs every hour.
+
+Snapshots run on startup and every 30 minutes after completion. Retention keeps **7 recovery points, not 7 files**, and never cleans up `Live/`. Local deletions are logged but stay in `Live/` unless `KEEPSYNC_DELETE_REMOTE=true`.
 
 ## Recover your data
 
@@ -109,6 +111,18 @@ docker compose run --rm keepsync backup     # Update Live now
 docker compose run --rm keepsync snapshot   # Save a recovery point now
 docker compose run --rm keepsync check      # Verify snapshot data
 ```
+
+Text logs are short and colored:
+
+```text
+12:10:00 WATCH   /data · live · quiet 2s
+12:10:04 EDIT    file.json · 1.1K → 5.4K uploaded
+12:10:08 ADD     folder/new.json · 80B uploaded
+12:10:12 DEL     old.json · kept on S3
+12:30:00 SNAP    20261021T123000.000000000Z-a1b2c3d4e5f67890.tar.gz · 24K
+```
+
+Use `KEEPSYNC_LOG_COLOR=false` or `NO_COLOR=1` to disable colors, `KEEPSYNC_LOG_FORMAT=json` for structured logs, or `KEEPSYNC_LOG_FILES=false` for batch summaries.
 
 The runtime uses a minimal non-root `scratch` image. Its scheduler sleeps between events, its index lives on disk, and uploads run one file at a time. CI enforces a 40 MiB unpacked image budget.
 
