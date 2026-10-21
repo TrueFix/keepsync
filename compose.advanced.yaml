@@ -1,7 +1,7 @@
 # Complete encrypted configuration. Use this file on its own, not as an override.
 services:
   keepsync:
-    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.3}
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.4}
     restart: unless-stopped
     read_only: true
     cpus: ${KEEPSYNC_CPUS:-0.5}

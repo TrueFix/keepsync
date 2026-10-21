@@ -130,6 +130,9 @@ func (h *compactHandler) Handle(_ context.Context, r slog.Record) error {
 	case "Waiting for source files":
 		label, color = "WAIT", "33"
 		text = str("source") + " · waiting for files"
+	case "Waiting for keepsync state":
+		label, color = "WAIT", "33"
+		text = "reattach state volume · " + str("target")
 	case "Source initialized automatically":
 		label, text = "SETUP", str("source")
 	case "Initializing encrypted snapshot repository":

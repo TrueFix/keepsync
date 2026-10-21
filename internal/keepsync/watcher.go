@@ -324,6 +324,7 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 	var dirty batch
 	var retry time.Time
 	waitingForData := false
+	waitingForState := false
 	nextBackup := time.Now().Add(duration(s.cfg.Interval))
 	nextSnapshot := s.snapshotDeadline(time.Now())
 	timer := time.NewTimer(time.Hour)
@@ -425,6 +426,12 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 					} else {
 						s.log.Debug("Waiting for source files", "source", s.cfg.Source, "retry_in", wait)
 					}
+				} else if errors.Is(result.err, errStateVolumeRequired) {
+					if !waitingForState {
+						s.log.Info("Waiting for keepsync state", "target", s.cfg.Repository, "retry_in", wait)
+					} else {
+						s.log.Debug("Waiting for keepsync state", "target", s.cfg.Repository, "retry_in", wait)
+					}
 				} else {
 					s.log.Error("Operation failed; retry scheduled", "operation", result.command, "error", result.err, "retry_in", wait)
 				}
@@ -442,9 +449,21 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 					if !nextSnapshot.IsZero() {
 						nextSnapshot = time.Now().Add(wait)
 					}
-				} else if result.err == nil && waitingForData {
-					waitingForData = false
-					nextSnapshot = s.snapshotDeadline(time.Now())
+				} else if errors.Is(result.err, errStateVolumeRequired) {
+					waitingForState = true
+					pendingSnapshot = false
+					if !nextSnapshot.IsZero() {
+						nextSnapshot = time.Now().Add(wait)
+					}
+				} else if result.err == nil {
+					if waitingForData {
+						waitingForData = false
+						nextSnapshot = s.snapshotDeadline(time.Now())
+					}
+					if waitingForState {
+						waitingForState = false
+						nextSnapshot = s.snapshotDeadline(time.Now())
+					}
 				}
 				if result.command == "backup" {
 					nextBackup = time.Now().Add(wait)
@@ -459,7 +478,7 @@ func (s *Service) runLoop(ctx context.Context, changes <-chan time.Time, run fun
 					} else {
 						retry = time.Now().Add(wait)
 						nextBackup = retry
-						if errors.Is(result.err, errSourceEmpty) {
+						if errors.Is(result.err, errSourceEmpty) || errors.Is(result.err, errStateVolumeRequired) {
 							retry = time.Time{}
 						}
 						pendingBackup = false

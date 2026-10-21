@@ -29,6 +29,8 @@ type Service struct {
 
 var errSourceEmpty = errors.New("source directory has no eligible files; waiting for data")
 
+var errStateVolumeRequired = errors.New("local source state is missing for a non-empty backup target; reattach the original keepsync-state volume")
+
 func New(c Config, out, stderr io.Writer) *Service {
 	if out == nil {
 		out = io.Discard

@@ -2,6 +2,7 @@ package keepsync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -53,8 +54,8 @@ func TestAutomaticSetupReadOnlySourceAndRestart(t *testing.T) {
 	// A lost state volume must not silently claim a non-empty remote target.
 	lost := c
 	lost.StateDir = filepath.Join(filepath.Dir(c.StateDir), "new-state")
-	if err := New(lost, io.Discard, io.Discard).Run(ctx, []string{"backup"}); err == nil {
-		t.Fatal("lost state was silently rebound")
+	if err := New(lost, io.Discard, io.Discard).Run(ctx, []string{"backup"}); !errors.Is(err, errStateVolumeRequired) {
+		t.Fatalf("lost state must wait for the original volume, got: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(c.Repository, "Live", "file.json")); err != nil || string(b) != "latest" {
 		t.Fatal("lost state changed remote data")

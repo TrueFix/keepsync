@@ -22,7 +22,7 @@ Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for L
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.3.3
+    image: mayankfawkes/keepsync:0.3.4
     restart: unless-stopped
     read_only: true
     cpus: 0.5

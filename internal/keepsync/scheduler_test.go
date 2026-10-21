@@ -84,6 +84,27 @@ func (l *safeLog) count(text string) int {
 	return strings.Count(l.text.String(), text)
 }
 
+func TestRunLoopWaitsForStateVolumeWithoutErrorSpam(t *testing.T) {
+	c := testConfig(t)
+	c.Method = "live"
+	c.Interval = "1h"
+	var logs safeLog
+	s := New(c, &logs, io.Discard)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.runLoop(ctx, nil, func(ctx context.Context, command string) error {
+			return errStateVolumeRequired
+		})
+	}()
+	waitFor(t, time.Second, func() bool { return logs.count("reattach state volume") >= 1 })
+	if logs.count("ERROR") > 0 {
+		t.Fatal("missing state should wait quietly, not log ERROR retries")
+	}
+	<-done
+}
+
 func TestSnapshotsRunWithoutLiveChanges(t *testing.T) {
 	if _, err := exec.LookPath("restic"); err != nil {
 		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {

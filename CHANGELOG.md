@@ -2,6 +2,12 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.3.4 — 2026-10-22
+
+### Changed
+
+- When the backup target already contains Live data but local state is missing, `serve` waits quietly and retries instead of logging repeated backup/snapshot errors.
+
 ## 0.3.3 — 2026-10-21
 
 ### Fixed

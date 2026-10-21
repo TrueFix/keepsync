@@ -85,7 +85,7 @@ func (s *Service) ensureSetup(ctx context.Context) error {
 				return fmt.Errorf("check initial S3 target: %w", err)
 			}
 			if !empty {
-				return errors.New("local source state is missing for a non-empty backup target; reattach the original keepsync-state volume")
+				return errStateVolumeRequired
 			}
 			var id [32]byte
 			if _, err := rand.Read(id[:]); err != nil {
