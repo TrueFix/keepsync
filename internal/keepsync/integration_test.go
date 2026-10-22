@@ -117,7 +117,10 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 		t.Fatal("failure lost previous success status")
 	}
 	// Recovery remains possible even when the original source is missing.
-	if err := os.RemoveAll(c.Source); err != nil {
+	// Keep the original inode allocated while simulating a missing/replaced
+	// volume. Immediate inode reuse is filesystem-dependent and is not a
+	// different-volume scenario for the identity check.
+	if err := os.Rename(c.Source, c.Source+"-lost"); err != nil {
 		t.Fatal(err)
 	}
 	fail("backup")

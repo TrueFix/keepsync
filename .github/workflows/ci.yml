@@ -32,7 +32,18 @@ jobs:
           check-latest: true
           cache: false
       - name: Format, vet, race and recovery tests
-        run: make check
+        id: checks
+        run: make check 2>&1 | tee checks.log
+      - name: Annotate test failures
+        if: failure() && steps.checks.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for line in Path("checks.log").read_text().splitlines():
+              if "FAIL" in line or ".go:" in line or "DATA RACE" in line:
+                  escaped = line.replace("%", "%25").replace("\r", "%0D")
+                  print(f"::error::{escaped}")
+          PY
       - name: Build versioned CLI
         run: |
           make build
