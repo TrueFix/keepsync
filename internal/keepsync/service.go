@@ -65,6 +65,25 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 	if args[0] == "restore" {
 		return s.restore(ctx, args[1:])
 	}
+	if args[0] == "reclaim" {
+		force := false
+		switch len(args) {
+		case 1:
+		case 2:
+			if args[1] != "--force" {
+				return fmt.Errorf("unknown reclaim option %q", args[1])
+			}
+			force = true
+		default:
+			return errors.New("unexpected command arguments")
+		}
+		unlock, err := lockState(s.cfg.StateDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		return s.reclaim(ctx, force)
+	}
 	if len(args) != 1 {
 		return errors.New("unexpected command arguments")
 	}
@@ -122,8 +141,6 @@ func (s *Service) Run(ctx context.Context, args []string) error {
 		return nil
 	case "register-source":
 		return s.register(ctx)
-	case "reclaim":
-		return s.reclaim(ctx)
 	case "backup":
 		if err := s.ensureSetup(ctx); err != nil {
 			return err
@@ -301,7 +318,16 @@ func (s *Service) registration(ctx context.Context) (Registration, error) {
 	}
 	id, err := store.Identity(ctx)
 	if err != nil {
-		return reg, err
+		if !missingObject(err) && !errors.Is(err, os.ErrNotExist) {
+			return reg, err
+		}
+		// Local state already proves ownership of this source; recreate the
+		// marker someone deleted on the target instead of refusing forever.
+		if err := store.Repair(ctx, reg.SourceID); err != nil {
+			return reg, fmt.Errorf("recreate missing identity marker: %w", err)
+		}
+		s.log.Warn("Recreated missing Live identity marker", "dataset", reg.Dataset)
+		id = reg.SourceID
 	}
 	if reg.SourceID != id {
 		return reg, errors.New("Live source identity changed; refusing operation")

@@ -17,7 +17,7 @@ func main() {
 	flags := flag.NewFlagSet("keepsync", flag.ContinueOnError)
 	config := flags.String("config", "", "optional JSON configuration file (otherwise use environment variables)")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage: keepsync [--config FILE] COMMAND [OPTIONS]\nCommands: init, register-source, reclaim, backup, snapshot, serve, snapshots, restore, check, prune, status, version")
+		fmt.Fprintln(flags.Output(), "Usage: keepsync [--config FILE] COMMAND [OPTIONS]\nCommands: init, register-source, reclaim [--force], backup, snapshot, serve, snapshots, restore, check, prune, status, version")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(os.Args[1:]); err != nil {

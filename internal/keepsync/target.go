@@ -92,6 +92,7 @@ type liveStore interface {
 	Empty(context.Context) (bool, error)
 	Bind(context.Context, string) error
 	Identity(context.Context) (string, error)
+	Repair(context.Context, string) error
 	Matches(context.Context, string, fileEntry) (bool, error)
 	Upload(context.Context, string, *os.File, fileEntry) error
 	Delete(context.Context, string) error
@@ -208,6 +209,38 @@ func missingObject(err error) bool {
 	var api smithy.APIError
 	return errors.As(err, &api) && (api.ErrorCode() == "NoSuchKey" || api.ErrorCode() == "NotFound" || api.ErrorCode() == "404")
 }
+
+// Repair recreates a missing identity marker that local state already
+// trusts. Unlike Bind, it never inspects Live/ for other objects: the caller
+// already proved ownership by presenting the exact ID from registration.json,
+// so this only restores what accidental deletion removed, never claims a
+// target local state doesn't already know about.
+func (s *s3Store) Repair(ctx context.Context, id string) error {
+	existing, err := s.Identity(ctx)
+	if err == nil {
+		if existing != id {
+			return errors.New("Live source identity belongs to another source")
+		}
+		return nil
+	}
+	if !missingObject(err) {
+		return err
+	}
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.target.bucket), Key: aws.String(s.key(markerName)), Body: bytes.NewReader([]byte(id)), IfNoneMatch: aws.String("*")})
+	if err == nil {
+		return nil
+	}
+	// Someone else created a marker between our read and write; verify it is
+	// still ours rather than assuming the write failure means an error.
+	existing, idErr := s.Identity(ctx)
+	if idErr != nil {
+		return err
+	}
+	if existing != id {
+		return errors.New("Live source identity belongs to another source")
+	}
+	return nil
+}
 func (s *s3Store) Bind(ctx context.Context, id string) error {
 	existing, err := s.Identity(ctx)
 	if err == nil {
@@ -278,6 +311,37 @@ func (s *localStore) Bind(ctx context.Context, id string) error {
 	}
 	f, err := os.OpenFile(filepath.Join(s.root, markerName), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(id)
+	return errors.Join(err, f.Sync(), f.Close())
+}
+func (s *localStore) Repair(ctx context.Context, id string) error {
+	existing, err := s.Identity(ctx)
+	if err == nil {
+		if existing != id {
+			return errors.New("Live source identity belongs to another source")
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(s.root, 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(s.root, markerName), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, idErr := s.Identity(ctx)
+			if idErr != nil {
+				return err
+			}
+			if existing != id {
+				return errors.New("Live source identity belongs to another source")
+			}
+			return nil
+		}
 		return err
 	}
 	_, err = f.WriteString(id)

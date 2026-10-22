@@ -129,6 +129,118 @@ func TestS3SnapshotsRetentionAndRecovery(t *testing.T) {
 	}
 }
 
+func TestMissingIdentityMarkerSelfHeals(t *testing.T) {
+	c, backend, _ := fakeS3(t)
+	s := New(c, io.Discard, io.Discard)
+	ctx := context.Background()
+	file := filepath.Join(c.Source, "file.txt")
+	if err := os.WriteFile(file, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Run(ctx, []string{"register-source"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Run(ctx, []string{"backup"}); err != nil {
+		t.Fatal(err)
+	}
+	var reg Registration
+	if err := readJSON(s.statePath("registration.json"), &reg); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an operator accidentally deleting the identity marker on S3.
+	if _, err := backend.DeleteObject("backups", "my-app/Live/"+markerName); err != nil {
+		t.Fatal(err)
+	}
+	fresh := New(c, io.Discard, io.Discard)
+	if err := fresh.Run(ctx, []string{"backup"}); err != nil {
+		t.Fatal("backup must self-heal a missing identity marker local state already trusts:", err)
+	}
+	obj, err := backend.GetObject("backups", "my-app/Live/"+markerName, nil)
+	if err != nil {
+		t.Fatal("marker was not recreated:", err)
+	}
+	b, err := io.ReadAll(obj.Contents)
+	obj.Contents.Close()
+	if err != nil || string(b) != reg.SourceID {
+		t.Fatal("recreated marker does not match the trusted local identity")
+	}
+	// A marker claimed by a different source must never be overwritten.
+	if _, err := backend.DeleteObject("backups", "my-app/Live/"+markerName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.PutObject("backups", "my-app/Live/"+markerName, nil, strings.NewReader(strings.Repeat("b", 64)), 64, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(c, io.Discard, io.Discard).Run(ctx, []string{"backup"}); err == nil {
+		t.Fatal("backup must refuse when the marker belongs to a different source")
+	}
+}
+
+func TestReclaimForceClaimsIdentitylessTarget(t *testing.T) {
+	c, backend, _ := fakeS3(t)
+	s := New(c, io.Discard, io.Discard)
+	ctx := context.Background()
+	file := filepath.Join(c.Source, "file.txt")
+	if err := os.WriteFile(file, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Automatic state-backed setup, as used by the default read-only Compose
+	// deployment: no marker file is ever written onto the source.
+	if err := s.Run(ctx, []string{"backup"}); err != nil {
+		t.Fatal(err)
+	}
+	// Losing both the state volume and the remote marker leaves nothing to
+	// verify against; reclaim must refuse without an explicit --force.
+	if err := os.Remove(s.statePath("registration.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.DeleteObject("backups", "my-app/Live/"+markerName); err != nil {
+		t.Fatal(err)
+	}
+	lost := New(c, io.Discard, io.Discard)
+	if err := lost.Run(ctx, []string{"reclaim"}); err == nil {
+		t.Fatal("reclaim without --force must not claim an identityless target")
+	}
+	if err := lost.Run(ctx, []string{"reclaim", "--force"}); err != nil {
+		t.Fatal("reclaim --force failed:", err)
+	}
+	var reg Registration
+	if err := readJSON(lost.statePath("registration.json"), &reg); err != nil {
+		t.Fatal(err)
+	}
+	if !validSourceID(reg.SourceID) {
+		t.Fatal("forced reclaim produced an invalid source identity")
+	}
+	obj, err := backend.GetObject("backups", "my-app/Live/"+markerName, nil)
+	if err != nil {
+		t.Fatal("marker was not created:", err)
+	}
+	b, err := io.ReadAll(obj.Contents)
+	obj.Contents.Close()
+	if err != nil || string(b) != reg.SourceID {
+		t.Fatal("remote marker does not match the claimed local identity")
+	}
+	if err := lost.Run(ctx, []string{"backup"}); err != nil {
+		t.Fatal("backup after forced reclaim failed:", err)
+	}
+	// Once claimed, a second forced reclaim from fresh state must agree with
+	// the existing marker instead of minting a conflicting new identity.
+	if err := os.Remove(lost.statePath("registration.json")); err != nil {
+		t.Fatal(err)
+	}
+	again := New(c, io.Discard, io.Discard)
+	if err := again.Run(ctx, []string{"reclaim", "--force"}); err != nil {
+		t.Fatal("reclaim --force on an already-claimed target failed:", err)
+	}
+	var reclaimedAgain Registration
+	if err := readJSON(again.statePath("registration.json"), &reclaimedAgain); err != nil {
+		t.Fatal(err)
+	}
+	if reclaimedAgain.SourceID != reg.SourceID {
+		t.Fatal("forced reclaim on an already-claimed target changed the identity")
+	}
+}
+
 func TestS3LiveUploadsRetryAndRepair(t *testing.T) {
 	c, backend, fail := fakeS3(t)
 	s := New(c, io.Discard, io.Discard)

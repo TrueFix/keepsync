@@ -63,6 +63,9 @@ func TestAutomaticSetupReadOnlySourceAndRestart(t *testing.T) {
 	// An explicit reclaim rebuilds local state from the existing target and
 	// resumes backups without touching what is already on S3.
 	reclaimer := New(lost, io.Discard, io.Discard)
+	if err := reclaimer.Run(ctx, []string{"reclaim", "--nonsense"}); err == nil {
+		t.Fatal("reclaim must reject unknown options")
+	}
 	if err := reclaimer.Run(ctx, []string{"reclaim"}); err != nil {
 		t.Fatal("reclaim failed:", err)
 	}

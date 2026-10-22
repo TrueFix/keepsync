@@ -22,7 +22,7 @@ Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for L
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.3.5
+    image: mayankfawkes/keepsync:0.3.6
     restart: unless-stopped
     read_only: true
     cpus: 0.5
@@ -58,7 +58,7 @@ docker compose up -d keepsync
 
 On the first run, KeepSync initializes its state and binds an unused target automatically. `/data` stays read-only: no source marker, registration command, or source permission change is required. Empty directories are watched until files arrive. UID/GID `10001:10001` needs read access to the files.
 
-Preserve `keepsync-state` across upgrades and use a dedicated target prefix with one active writer. Saved identities are checked on every backup; a missing state volume does not silently claim an existing backup target. If you lose `keepsync-state` but want to keep backing up to the same prefix, run `docker compose run --rm keepsync reclaim` once to rebuild local state from the existing target, then start normally.
+Preserve `keepsync-state` across upgrades and use a dedicated target prefix with one active writer. Saved identities are checked on every backup; a missing state volume does not silently claim an existing backup target. If you lose `keepsync-state` but want to keep backing up to the same prefix, run `docker compose run --rm keepsync reclaim` once to rebuild local state from the existing target, then start normally. If the remote identity marker is gone too, `backup`/`snapshot` recreate it automatically from local state; if both are gone, `keepsync reclaim --force` explicitly claims the target as yours, since nothing left on disk or in S3 can verify that automatically.
 
 Live changes upload after 2 seconds of quiet, or at most 30 seconds of batching during continuous writes. File edits, atomic saves, creates, renames, and deletes are watched recursively. Network/FUSE mounts automatically use a lightweight metadata-polling fallback; set `KEEPSYNC_WATCH_MODE=poll` if your host doesn't deliver filesystem events reliably. A full reconciliation still runs every hour.
 

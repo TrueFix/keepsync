@@ -3,7 +3,7 @@
 The README's configuration uses portable, unencrypted TAR snapshots every 30
 minutes. This guide covers encrypted snapshots and additional controls.
 
-The examples use `mayankfawkes/keepsync:0.3.5`. To test a local build instead, run
+The examples use `mayankfawkes/keepsync:0.3.6`. To test a local build instead, run
 `make image VERSION=dev` and set `KEEPSYNC_IMAGE=keepsync:test`.
 
 ## Encrypted Restic configuration

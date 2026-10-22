@@ -121,7 +121,13 @@ func (s *Service) ensureSetup(ctx context.Context) error {
 // source without comparing a previously recorded file ID: running this
 // command is an explicit operator decision, never an automatic fallback
 // during backup, snapshot, or serve.
-func (s *Service) reclaim(ctx context.Context) error {
+//
+// force additionally claims a target that has no identity marker at all
+// (local state and the remote marker both lost). Nothing on disk or in S3
+// can distinguish that from someone else's backup at the wrong prefix, so
+// force is never implied: the operator must type it, confirming by hand
+// what KeepSync cannot verify on its own.
+func (s *Service) reclaim(ctx context.Context, force bool) error {
 	if _, err := os.Stat(s.statePath("registration.json")); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("registration already exists; reclaim only applies when local state is missing")
 	}
@@ -152,10 +158,21 @@ func (s *Service) reclaim(ctx context.Context) error {
 	}
 	id, err := store.Identity(ctx)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || missingObject(err) {
-			return errors.New("backup target has no existing identity to reclaim; start normally instead")
+		if !errors.Is(err, os.ErrNotExist) && !missingObject(err) {
+			return err
 		}
-		return err
+		if !force {
+			return errors.New("backup target has no existing identity to reclaim; rerun with --force to claim it as yours, or start normally on an empty target")
+		}
+		var random [32]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return err
+		}
+		id = hex.EncodeToString(random[:])
+		if err := store.Repair(ctx, id); err != nil {
+			return fmt.Errorf("claim backup target: %w", err)
+		}
+		s.log.Warn("Claimed backup target without an existing identity", "source", source, "dataset", s.cfg.Dataset)
 	}
 	if !validSourceID(id) {
 		return errors.New("existing backup target has an invalid source identity")

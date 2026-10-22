@@ -2,6 +2,13 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.3.6 — 2026-10-22
+
+### Added
+
+- `backup` and `snapshot` recreate a missing Live identity marker automatically when local state already trusts a `source_id`, instead of failing forever on a deleted marker.
+- `keepsync reclaim --force` claims a Live target that has no identity marker at all (local state and the remote marker both lost). This is never automatic; the operator must explicitly confirm ownership KeepSync cannot otherwise verify.
+
 ## 0.3.5 — 2026-10-22
 
 ### Added

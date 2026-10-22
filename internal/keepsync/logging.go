@@ -135,6 +135,12 @@ func (h *compactHandler) Handle(_ context.Context, r slog.Record) error {
 		text = "run `keepsync reclaim` to reattach · " + str("target")
 	case "Source initialized automatically":
 		label, text = "SETUP", str("source")
+	case "Recreated missing Live identity marker":
+		label, color = "REPAIR", "33"
+		text = "dataset " + str("dataset")
+	case "Claimed backup target without an existing identity":
+		label, color = "CLAIM", "33"
+		text = str("source") + " · no prior identity found; forced"
 	case "Backup target reclaimed":
 		label, color = "SETUP", "32"
 		text = str("source") + " · state rebuilt from remote identity"
