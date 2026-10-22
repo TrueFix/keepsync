@@ -176,6 +176,56 @@ metadata preservation is required.
 | `KEEPSYNC_LOG_FILES` | `true` | Log each confirmed Live upload |
 | `KEEPSYNC_LOG_COLOR` | `true` | Color compact text logs; `NO_COLOR` also disables color. JSON never contains ANSI. |
 
+## Multiple host paths under one Compose project
+
+State-mode identity is tied to the device and inode of the directory mounted
+at `/data` itself, captured once in `registration.json` as `source_file_id`.
+A genuine bind mount (`- ./source:/data:ro`) keeps that stable across restarts,
+image updates, and `--force-recreate`. Combining several host paths into one
+`/data` by mounting each of them separately under an unmounted parent (for
+example `- ./data:/data/data:ro` plus `- ./config:/data/config:ro`, with no
+mount for `/data` itself) does not: `/data` is then a container-filesystem
+directory, not a bind mount, and the container runtime does not guarantee it
+reuses the same device/inode on every recreation. The symptom is `ERROR
+backup: source volume changed; existing backup identity preserved` after an
+otherwise ordinary `docker compose pull && up`.
+
+Run one KeepSync sidecar per real host path instead, each with its own
+`KEEPSYNC_TARGET` prefix and its own `/var/lib/keepsync` state volume:
+
+```yaml
+  keepsync-data:
+    image: mayankfawkes/keepsync:0.3.6
+    environment:
+      KEEPSYNC_TARGET: s3://your-bucket/backups/app/data
+    volumes:
+      - ./data:/data:ro
+      - keepsync-data-state:/var/lib/keepsync
+
+  keepsync-config:
+    image: mayankfawkes/keepsync:0.3.6
+    environment:
+      KEEPSYNC_TARGET: s3://your-bucket/backups/app/config
+    volumes:
+      - ./config:/data:ro
+      - keepsync-config-state:/var/lib/keepsync
+```
+
+Or, if the host paths already share a common parent directory outside Compose
+(e.g. both `data/` and `config/` live under `./source/`), bind-mount that
+single parent instead and keep one sidecar.
+
+## Everyday reconciliation speed
+
+`KEEPSYNC_INTERVAL` also controls how quickly a file deleted directly from the
+remote target (outside KeepSync) gets noticed and re-uploaded: deletion isn't
+pushed to KeepSync, so it's only caught on the next full reconciliation scan,
+which runs every `KEEPSYNC_INTERVAL` (default `1h`) and verifies remote
+metadata with a `HEAD` request per file, independent of Live-mode's
+filesystem-event path. Lowering it (e.g. `10s`) trades more S3 request volume
+for faster drift correction; it does not affect how quickly local changes are
+uploaded in Live mode, which is governed by `KEEPSYNC_DEBOUNCE`/`KEEPSYNC_MAX_WAIT`.
+
 The watcher processes create/edit/rename/remove events recursively. A tracked
 delete can be handled even when it removes the final file; an empty full scan
 still does not sweep remote objects. With `KEEPSYNC_DELETE_REMOTE=false`, deletion
