@@ -2,7 +2,6 @@
   "dataset": "personal-files",
   "source": "/data",
   "repository": "s3://my-backup-bucket/keepsync/personal-files",
-  "password_file": "/run/secrets/restic_password",
   "state_dir": "/var/lib/keepsync",
   "restore_root": "/restore",
   "interval": "1h",
@@ -17,12 +16,10 @@
   "log_level": "info",
   "log_files": true,
   "log_color": true,
-  "restic": "restic",
   "excludes": ["**/.cache/**", "**/node_modules/**"],
   "snapshots": {
-    "enabled": false,
-    "format": "restic",
+    "enabled": true,
     "interval": "24h",
-    "keep_last": 7
+    "keep_last": 14
   }
 }

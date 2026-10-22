@@ -12,8 +12,7 @@ import (
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	root := t.TempDir()
-	// macOS /var is a symlink to /private/var. Restic stores the canonical
-	// source path, so fixtures must use that same path on every platform.
+	// Use canonical fixture paths on platforms where /var is a symlink.
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +21,6 @@ func testConfig(t *testing.T) Config {
 	c.Dataset = "test"
 	c.Source = filepath.Join(root, "source")
 	c.Repository = filepath.Join(root, "repo")
-	c.PasswordFile = filepath.Join(root, "password")
 	c.StateDir = filepath.Join(root, "state")
 	c.RestoreRoot = filepath.Join(root, "restore")
 	c.Interval = "1s"
@@ -30,9 +28,6 @@ func testConfig(t *testing.T) Config {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := os.WriteFile(c.PasswordFile, []byte("integration-test-password"), 0600); err != nil {
-		t.Fatal(err)
 	}
 	return c
 }
@@ -75,7 +70,6 @@ func TestConfigRejectsUnsafeValues(t *testing.T) {
 	}{
 		{"overlapping state", func(c *Config) { c.StateDir = filepath.Join(c.Source, "state") }},
 		{"overlapping restore", func(c *Config) { c.RestoreRoot = c.Source }},
-		{"password in source", func(c *Config) { c.PasswordFile = filepath.Join(c.Source, "password") }},
 		{"root source", func(c *Config) { c.Source = "/" }},
 		{"relative source", func(c *Config) { c.Source = "data" }},
 		{"invalid interval", func(c *Config) { c.Interval = "0s" }},
@@ -90,6 +84,7 @@ func TestConfigRejectsUnsafeValues(t *testing.T) {
 		{"invalid watch mode", func(c *Config) { c.WatchMode = "broken" }},
 		{"invalid poll interval", func(c *Config) { c.WatchInterval = "0s" }},
 		{"unknown snapshot format", func(c *Config) { c.Snapshots.Format = "zip" }},
+		{"removed encrypted format", func(c *Config) { c.Snapshots.Format = "restic" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := testConfig(t)
@@ -154,7 +149,7 @@ func TestEmptySourceIgnoresMarker(t *testing.T) {
 }
 
 func TestComposeEnvironmentConfiguration(t *testing.T) {
-	for _, key := range []string{"KEEPSYNC_TARGET", "KEEPSYNC_DATASET", "KEEPSYNC_SOURCE_PATH", "KEEPSYNC_REPOSITORY", "KEEPSYNC_PASSWORD_FILE", "KEEPSYNC_STATE_DIR", "KEEPSYNC_RESTORE_ROOT", "KEEPSYNC_INTERVAL", "KEEPSYNC_METHOD", "KEEPSYNC_DEBOUNCE", "KEEPSYNC_MAX_WAIT", "KEEPSYNC_SNAPSHOTS_ENABLED", "KEEPSYNC_SNAPSHOT_FORMAT", "KEEPSYNC_SNAPSHOT_INTERVAL", "KEEPSYNC_SNAPSHOT_RETAIN", "KEEPSYNC_LOG_LEVEL", "KEEPSYNC_LOG_FORMAT", "KEEPSYNC_LOG_FILES", "KEEPSYNC_DELETE_REMOTE", "KEEPSYNC_EXCLUDES", "KEEPSYNC_S3_ENDPOINT", "KEEPSYNC_MAX_WATCHES"} {
+	for _, key := range []string{"KEEPSYNC_TARGET", "KEEPSYNC_DATASET", "KEEPSYNC_SOURCE_PATH", "KEEPSYNC_REPOSITORY", "KEEPSYNC_STATE_DIR", "KEEPSYNC_RESTORE_ROOT", "KEEPSYNC_INTERVAL", "KEEPSYNC_METHOD", "KEEPSYNC_DEBOUNCE", "KEEPSYNC_MAX_WAIT", "KEEPSYNC_SNAPSHOTS_ENABLED", "KEEPSYNC_SNAPSHOT_FORMAT", "KEEPSYNC_SNAPSHOT_INTERVAL", "KEEPSYNC_SNAPSHOT_RETAIN", "KEEPSYNC_LOG_LEVEL", "KEEPSYNC_LOG_FORMAT", "KEEPSYNC_LOG_FILES", "KEEPSYNC_DELETE_REMOTE", "KEEPSYNC_EXCLUDES", "KEEPSYNC_S3_ENDPOINT", "KEEPSYNC_MAX_WATCHES"} {
 		old, exists := os.LookupEnv(key)
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)
@@ -175,7 +170,7 @@ func TestComposeEnvironmentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Dataset != "files" || c.Source != "/data" || c.StateDir != "/var/lib/keepsync" || c.RestoreRoot != "/restore" || c.PasswordFile != "/run/secrets/restic_password" || c.Interval != "1h" || c.Snapshots.Enabled {
+	if c.Dataset != "files" || c.Source != "/data" || c.StateDir != "/var/lib/keepsync" || c.RestoreRoot != "/restore" || c.Interval != "1h" || !c.Snapshots.Enabled || c.Method != "live" || c.Snapshots.Format != "tar" || c.Snapshots.KeepLast != 14 {
 		t.Fatalf("unexpected container defaults: %+v", c)
 	}
 	t.Setenv("KEEPSYNC_SOURCE_PATH", "/srv/files")

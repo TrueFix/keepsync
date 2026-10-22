@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -48,12 +47,6 @@ func fakeS3(t *testing.T) (Config, *s3mem.Backend, *atomic.Bool) {
 }
 
 func TestS3SnapshotsRetentionAndRecovery(t *testing.T) {
-	if _, err := exec.LookPath("restic"); err != nil {
-		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {
-			t.Fatal(err)
-		}
-		t.Skip("restic not installed")
-	}
 	c, backend, _ := fakeS3(t)
 	c.Snapshots.Enabled = true
 	c.Snapshots.KeepLast = 2
@@ -83,14 +76,10 @@ func TestS3SnapshotsRetentionAndRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		ids = append(ids, status.SnapshotID)
-		if text == "second" {
-			if err := s.restic(ctx, io.Discard, "backup", "--tag", s.tag()+":pending", "--host", c.Dataset, "--", c.Source); err != nil {
-				t.Fatal(err)
-			}
-		}
 	}
 	var out bytes.Buffer
-	if err := s.restic(ctx, &out, "snapshots", "--json", "--tag", s.tag()); err != nil {
+	lister := New(c, &out, io.Discard)
+	if err := lister.Run(ctx, []string{"snapshots"}); err != nil {
 		t.Fatal(err)
 	}
 	var snapshots []struct {
@@ -119,8 +108,8 @@ func TestS3SnapshotsRetentionAndRecovery(t *testing.T) {
 	// Disabling new snapshots must not prevent restoring existing history.
 	s.cfg.Snapshots.Enabled = false
 	target := filepath.Join(c.RestoreRoot, "old")
-	run("restore", "--snapshot", ids[1][:9], "--target", target)
-	recovered := filepath.Join(target, strings.TrimPrefix(file, string(filepath.Separator)))
+	run("restore", "--snapshot", ids[1], "--target", target)
+	recovered := filepath.Join(target, "data", "file.txt")
 	if b, err := os.ReadFile(recovered); err != nil || string(b) != "second" {
 		t.Fatalf("old snapshot recovery: %s, %v", b, err)
 	}
@@ -317,8 +306,8 @@ func TestTargetParsingAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.snapshots() != "s3:https://s3.amazonaws.com/bucket/my-app/Snapshots" {
-		t.Fatal(target.snapshots())
+	if target.bucket != "bucket" || target.prefix != "my-app" {
+		t.Fatal(target)
 	}
 	if _, err := parseTarget("s3://bucket/prefix", "https://user:secret@example.com"); err == nil {
 		t.Fatal("accepted endpoint credentials")

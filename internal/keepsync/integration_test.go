@@ -5,28 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// These tests exercise real encrypted repositories. CI installs Restic and
-// requires these tests; developers without Restic get an explicit skip.
+// Exercise automatic setup, archive recovery, and ownership guards together.
 func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
-	if _, err := exec.LookPath("restic"); err != nil {
-		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {
-			t.Fatal("restic is required")
-		}
-		t.Skip("restic not installed")
-	}
 	c := testConfig(t)
 	c.Snapshots.Enabled = true
 	for key, value := range map[string]string{
 		"KEEPSYNC_DATASET":           c.Dataset,
 		"KEEPSYNC_SOURCE_PATH":       c.Source,
 		"KEEPSYNC_TARGET":            c.Repository,
-		"KEEPSYNC_PASSWORD_FILE":     c.PasswordFile,
 		"KEEPSYNC_STATE_DIR":         c.StateDir,
 		"KEEPSYNC_RESTORE_ROOT":      c.RestoreRoot,
 		"KEEPSYNC_INTERVAL":          c.Interval,
@@ -62,15 +53,12 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 	run("backup") // First use initializes state without writing to the source.
 	fail("register-source")
 	run("snapshot")
-	var snapshots bytes.Buffer
-	if err := s.restic(ctx, &snapshots, "snapshots", "--json", "--tag", s.tag()); err != nil {
-		t.Fatal(err)
-	}
+	run("snapshots")
 	var list []struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(snapshots.Bytes(), &list); err != nil || len(list) != 1 {
-		t.Fatalf("snapshots: %s, %v", snapshots.String(), err)
+	if err := json.Unmarshal(output.Bytes(), &list); err != nil || len(list) != 1 {
+		t.Fatalf("snapshots: %s, %v", output.String(), err)
 	}
 	id := list[0].ID
 	if err := os.WriteFile(file, []byte("newest"), 0600); err != nil {
@@ -95,7 +83,7 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 	fail("restore", "--snapshot", id, "--target", c.RestoreRoot)
 	target := filepath.Join(c.RestoreRoot, "recovered")
 	run("restore", "--snapshot", id, "--target", target)
-	recovered := filepath.Join(target, strings.TrimPrefix(file, string(filepath.Separator)))
+	recovered := filepath.Join(target, "data", "important.txt")
 	if data, err := os.ReadFile(recovered); err != nil || string(data) != "original" {
 		t.Fatalf("restore: %q, %v", data, err)
 	}
@@ -141,8 +129,8 @@ func TestIntegrationBackupRecoveryAndGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail("backup") // Missing identity, even though files exist.
-	// Restore repository must match the original repository ID.
-	reg.RepositoryID = "wrong"
+	// A changed target identity must also block recovery.
+	reg.SourceID = strings.Repeat("f", 64)
 	if err := writeJSON(s.statePath("registration.json"), reg); err != nil {
 		t.Fatal(err)
 	}

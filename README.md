@@ -1,39 +1,26 @@
 # KeepSync
 
-**Live S3 backups with snapshot history, built for Docker.**
+**Automatic S3 backups for Docker: live files and portable TAR snapshots.**
 
 [![CI](https://github.com/TrueFix/keepsync/actions/workflows/ci.yml/badge.svg)](https://github.com/TrueFix/keepsync/actions/workflows/ci.yml)
 [![Release](https://github.com/TrueFix/keepsync/actions/workflows/release.yml/badge.svg)](https://github.com/TrueFix/keepsync/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Mount your files at `/data`. KeepSync uploads changes to `Live/` and saves scheduled TAR recovery points directly under `snapshots/`. **Restarts resume backups; restores are always explicit.**
+Mount a folder, set your S3 target and credentials, and start KeepSync. Setup is
+automatic, the source stays read-only, and restarts resume backups.
 
-| Snapshot format | Password | Recovery |
-|---|---|---|
-| `tar` | None; unencrypted `.tar.gz` | Download and extract on your PC |
-| `restic` | Required; encrypted and deduplicated | Restore with KeepSync or Restic |
+## Quick start
 
-`Live/` contains ordinary files. Your storage provider's server-side encryption is separate from snapshot encryption.
-
-## Live + TAR snapshots every 30 minutes
-
-Use the [Docker Hub image](https://hub.docker.com/r/mayankfawkes/keepsync) for Linux `amd64` or `arm64`.
+Add this service to your application's Compose file. Replace `./data` with the
+existing host folder you want to back up:
 
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.3.6
+    image: mayankfawkes/keepsync:0.4.0
     restart: unless-stopped
-    read_only: true
-    cpus: 0.5
-    mem_limit: 256m
     environment:
       KEEPSYNC_TARGET: s3://your-bucket/backups/app
-      KEEPSYNC_METHOD: live
-      KEEPSYNC_SNAPSHOTS_ENABLED: "true"
-      KEEPSYNC_SNAPSHOT_FORMAT: tar
-      KEEPSYNC_SNAPSHOT_INTERVAL: 30m
-      KEEPSYNC_SNAPSHOT_RETAIN: "7"
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_DEFAULT_REGION: us-east-1
@@ -50,45 +37,92 @@ volumes:
   keepsync-state:
 ```
 
-Set your target and credentials, mount a directory the container can read, then start it:
+Set the credentials in your project's `.env`, then run:
 
 ```bash
 docker compose up -d keepsync
+docker compose logs -f keepsync
 ```
 
-On the first run, KeepSync initializes its state and binds an unused target automatically. `/data` stays read-only: no source marker, registration command, or source permission change is required. Empty directories are watched until files arrive. UID/GID `10001:10001` needs read access to the files.
+The image supports Linux `amd64` and `arm64`. The default user `10001:10001`
+needs read access to your source; set `user: "UID:GID"` to match the application
+when needed. The state volume must be writable by that user.
 
-Mount `/data` from **one** real bind mount, not an assembled directory of several mounts under an unmounted parent. KeepSync's default identity check is tied to that directory's own device/inode, which stays stable only for a genuine bind mount; a synthesized parent directory gets a new one on every container recreation, including routine image updates. If you need to back up multiple host paths, run one KeepSync container per path instead of combining them under a shared `/data`.
+For a standalone setup, use [`compose.yaml`](compose.yaml) and
+[`.env.example`](.env.example).
 
-Preserve `keepsync-state` across upgrades and use a dedicated target prefix with one active writer. Saved identities are checked on every backup; a missing state volume does not silently claim an existing backup target. If you lose `keepsync-state` but want to keep backing up to the same prefix, run `docker compose run --rm keepsync reclaim` once to rebuild local state from the existing target, then start normally. If the remote identity marker is gone too, `backup`/`snapshot` recreate it automatically from local state; if both are gone, `keepsync reclaim --force` explicitly claims the target as yours, since nothing left on disk or in S3 can verify that automatically.
+## What runs automatically
 
-Live changes upload after 2 seconds of quiet, or at most 30 seconds of batching during continuous writes. File edits, atomic saves, creates, renames, and deletes are watched recursively. Network/FUSE mounts automatically use a lightweight metadata-polling fallback; set `KEEPSYNC_WATCH_MODE=poll` if your host doesn't deliver filesystem events reliably. A full reconciliation still runs every hour.
+| Behavior | Default |
+|---|---|
+| Local changes | Upload after 2 seconds of quiet; maximum batching delay 30 seconds |
+| Remote verification | Full scan every hour; missing Live objects are re-uploaded from local files |
+| Snapshots | Full `.tar.gz` on startup when due, then every 24 hours after completion |
+| Retention | Keep 14 successful recovery points |
+| Local deletions | Keep the existing S3 copy |
+| Empty source | Wait for files without sweeping the remote target |
 
-Snapshots run on startup and every 30 minutes after completion. Retention keeps **7 recovery points, not 7 files**, and never cleans up `Live/`. Local deletions are logged but stay in `Live/` unless `KEEPSYNC_DELETE_REMOTE=true`.
+Live uploads are ordinary objects under `Live/`. Snapshots and their JSON
+metadata are stored under `snapshots/`. KeepSync does not encrypt either;
+storage-provider encryption is separate. Each TAR snapshot is a full archive,
+so allow enough state-volume space to stage it. For databases, back up native
+dumps or a consistent filesystem snapshot rather than relying on copies of
+actively changing database files.
 
-## Recover your data
+To change the schedule, add only the settings you need:
 
-### Download and extract a TAR snapshot
-
-Snapshots are stored as a flat pair:
-
-```text
-snapshots/20261021T083000.123456789Z-a1b2c3d4e5f67890.tar.gz
-snapshots/20261021T083000.123456789Z-a1b2c3d4e5f67890.json
+```yaml
+environment:
+  KEEPSYNC_INTERVAL: 10s             # Check S3 for missing Live files
+  KEEPSYNC_SNAPSHOT_INTERVAL: 24h
+  KEEPSYNC_SNAPSHOT_RETAIN: "14"
+  # KEEPSYNC_S3_ENDPOINT: https://s3.example.com
 ```
 
-The JSON contains source information, creation time, size, and SHA-256. Retention removes both files together. Download the TAR from your S3 console and open it with 7-Zip or extract it with:
+A `10s` interval increases S3 requests: each full scan checks remote metadata
+for eligible local files. It is separate from live-change detection and the
+snapshot schedule. Disable new snapshots with `KEEPSYNC_SNAPSHOTS_ENABLED=false`.
+
+## Keep upgrades simple
+
+Preserve the state volume and use a dedicated target prefix with one active
+writer. Mount the source directory itself at `/data`. To include `data/` and
+`config/` in one backup, place both inside a real host directory such as
+`./source/` and mount `./source:/data:ro`. Mounting only children under an
+unmounted `/data` parent can cause identity errors when containers are recreated.
+
+```bash
+docker compose pull keepsync
+docker compose up -d keepsync
+```
+
+A deleted remote identity marker is repaired from intact local state. If the
+state volume was lost, stop the sidecar and explicitly reconnect it:
+
+```bash
+docker compose stop keepsync
+docker compose run --rm keepsync reclaim
+docker compose up -d keepsync
+```
+
+If both identities are gone, `reclaim --force` explicitly claims the target.
+Use it only when you have verified that the mounted source belongs to that
+backup prefix. KeepSync never makes that decision automatically.
+
+## Restore
+
+Download a `.tar.gz` from `snapshots/` and extract it with any TAR/GZIP tool:
 
 ```bash
 mkdir -p recovery
 tar -xzf snapshot.tar.gz -C recovery
 ```
 
-Your readable, editable files are in `recovery/data/`. The archive includes `keepsync.json` metadata too, so downloading the TAR alone is enough. No KeepSync installation or password is required. Older nested archives remain readable and expire through normal retention.
+Your files are in `recovery/data/`; `keepsync.json` contains recovery metadata.
+No KeepSync installation is required.
 
-### Restore through the container
-
-List recovery points, then restore into a new or empty directory writable by the container user:
+Or list snapshots and restore through KeepSync into a new directory writable
+by the container user:
 
 ```bash
 docker compose run --rm keepsync snapshots
@@ -96,36 +130,27 @@ docker compose run --rm --volume ./recovery:/restore keepsync \
   restore --snapshot <filename.tar.gz> --target /restore/recovered
 ```
 
-Files appear under `./recovery/recovered/data`. KeepSync verifies the archive before exposing the recovered directory and never restores over the live source.
+Files appear in `./recovery/recovered/data/`. Restore is always explicit,
+verifies the archive, and never overwrites the live source.
 
-## Encrypted snapshots and advanced settings
-
-Use [`compose.advanced.yaml`](compose.advanced.yaml) for encrypted Restic history, exclusions, S3-compatible endpoints, JSON logs, and resource settings. [The advanced guide](docs/advanced.md) covers password creation, initialization, recovery without local state, and the full environment reference.
-
-TAR snapshots are full archives; Restic snapshots deduplicate data. Both stream through disk-backed working files rather than loading the dataset into memory. Allow enough state-volume space for a full compressed TAR snapshot. Back up databases using native dumps or consistent filesystem snapshots.
-
-## Everyday commands
+## Useful commands
 
 ```bash
-docker compose logs -f keepsync
 docker compose run --rm keepsync status
-docker compose run --rm keepsync backup     # Update Live now
-docker compose run --rm keepsync snapshot   # Save a recovery point now
-docker compose run --rm keepsync check      # Verify snapshot data
+docker compose run --rm keepsync backup      # Verify and update Live now
+docker compose run --rm keepsync snapshot    # Save a recovery point now
+docker compose run --rm keepsync check       # Verify snapshot archives
 ```
 
-Text logs are short and colored:
+## Upgrading from 0.3.x
 
-```text
-12:10:00 WATCH   /data · live · quiet 2s
-12:10:04 EDIT    file.json · 1.1K → 5.4K uploaded
-12:10:08 ADD     folder/new.json · 80B uploaded
-12:10:12 DEL     old.json · kept on S3
-12:30:00 SNAP    20261021T123000.000000000Z-a1b2c3d4e5f67890.tar.gz · 24K
-```
+Version 0.4.0 removes Restic and password-based snapshots. Existing Live data,
+TAR history, and source registrations remain usable. Remove password settings
+and select TAR if your old configuration explicitly selects another format.
+Existing encrypted repositories are neither migrated nor deleted; use a
+separately installed Restic with the original password to recover them.
 
-Use `KEEPSYNC_LOG_COLOR=false` or `NO_COLOR=1` to disable colors, `KEEPSYNC_LOG_FORMAT=json` for structured logs, or `KEEPSYNC_LOG_FILES=false` for batch summaries.
-
-The runtime uses a minimal non-root `scratch` image. Its scheduler sleeps between events, its index lives on disk, and uploads run one file at a time. CI enforces a 40 MiB unpacked image budget.
-
-[Docker Hub](https://hub.docker.com/r/mayankfawkes/keepsync) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [MIT License](LICENSE)
+[Advanced configuration and recovery](docs/advanced.md) ·
+[Docker Hub](https://hub.docker.com/r/mayankfawkes/keepsync) ·
+[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) ·
+[Security](SECURITY.md) · [MIT License](LICENSE)

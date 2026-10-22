@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -221,15 +220,8 @@ func TestComposeStyleStartupWaitsForFilesAndCreatesTar(t *testing.T) {
 	}
 }
 
-func TestAutomaticEncryptedRepositoryInitialization(t *testing.T) {
-	if _, err := exec.LookPath("restic"); err != nil {
-		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {
-			t.Fatal(err)
-		}
-		t.Skip("restic not installed")
-	}
+func TestAutomaticSnapshotDefaults(t *testing.T) {
 	c := testConfig(t)
-	c.Snapshots.Enabled = true
 	s := New(c, io.Discard, io.Discard)
 	ctx := context.Background()
 	if err := os.WriteFile(filepath.Join(c.Source, "file"), []byte("data"), 0644); err != nil {
@@ -239,52 +231,61 @@ func TestAutomaticEncryptedRepositoryInitialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.Run(ctx, []string{"snapshot"}); err != nil {
-		t.Fatal("automatic Restic init failed:", err)
+		t.Fatal("automatic snapshot failed:", err)
 	}
-	var reg Registration
-	if err := readJSON(s.statePath("registration.json"), &reg); err != nil {
+	var status Status
+	if err := readJSON(s.statePath("status.json"), &status); err != nil {
 		t.Fatal(err)
 	}
-	if reg.RepositoryID == "" {
-		t.Fatal("encrypted repository not bound")
+	if status.SnapshotFormat != "tar" || !validArchiveID(status.SnapshotID) {
+		t.Fatal("default snapshot was not a TAR archive")
 	}
 	if _, err := os.Stat(filepath.Join(c.Source, markerName)); !os.IsNotExist(err) {
-		t.Fatal("encrypted setup wrote to source")
+		t.Fatal("automatic setup wrote to source")
 	}
 	if err := s.Run(ctx, []string{"check"}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestMissingSnapshotPasswordDoesNotBlockLive(t *testing.T) {
-	if _, err := exec.LookPath("restic"); err != nil {
-		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {
-			t.Fatal(err)
-		}
-		t.Skip("restic not installed")
-	}
+func TestUpgradePreservesRegistrationAndLegacyHistory(t *testing.T) {
 	c := testConfig(t)
-	c.Snapshots.Enabled = true
 	s := New(c, io.Discard, io.Discard)
 	ctx := context.Background()
-	if err := os.Remove(c.PasswordFile); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(c.Source, "file"), []byte("protected"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(c.Source, "file"), []byte("current data"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Run(ctx, []string{"backup"}); err != nil {
-		t.Fatal("Live depended on snapshot password:", err)
-	}
-	if err := s.Run(ctx, []string{"snapshot"}); err == nil {
-		t.Fatal("encrypted snapshot accepted missing password")
-	}
-	var status Status
-	if err := readJSON(s.statePath("status.json"), &status); err != nil {
 		t.Fatal(err)
 	}
-	if status.LastSuccess.IsZero() || status.LastError != "" || status.SnapshotError == "" {
-		t.Fatal("Live and snapshot statuses were not separated")
+	var old map[string]any
+	if err := readJSON(s.statePath("registration.json"), &old); err != nil {
+		t.Fatal(err)
+	}
+	// Older registrations may still carry the removed repository identity.
+	old["repository_id"] = "legacy-repository"
+	if err := writeJSON(s.statePath("registration.json"), old); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(c.Repository, "Snapshots", "config")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("leave legacy history alone"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fresh := New(c, io.Discard, io.Discard)
+	for _, command := range []string{"backup", "snapshot", "check", "prune"} {
+		if err := fresh.Run(ctx, []string{command}); err != nil {
+			t.Fatalf("upgrade %s: %v", command, err)
+		}
+	}
+	reg, err := fresh.registration(ctx)
+	if err != nil || reg.SourceID != old["source_id"] {
+		t.Fatal("upgrade changed source identity:", err)
+	}
+	if b, err := os.ReadFile(legacy); err != nil || string(b) != "leave legacy history alone" {
+		t.Fatal("TAR operations touched legacy history:", err)
 	}
 }
 

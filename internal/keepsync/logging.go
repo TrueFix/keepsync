@@ -144,8 +144,6 @@ func (h *compactHandler) Handle(_ context.Context, r slog.Record) error {
 	case "Backup target reclaimed":
 		label, color = "SETUP", "32"
 		text = str("source") + " · state rebuilt from remote identity"
-	case "Initializing encrypted snapshot repository":
-		label, text = "INIT", "encrypted snapshots"
 	case "Archive restored":
 		label, text, color = "RESTORE", str("target"), "32"
 	case "Archive integrity check complete":

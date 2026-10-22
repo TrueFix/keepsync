@@ -19,10 +19,6 @@ import (
 func TestTarSnapshotsArePortableRetainedAndRecoverable(t *testing.T) {
 	c, backend, fail := fakeS3(t)
 	c.Snapshots = SnapshotConfig{Enabled: true, Format: "tar", Interval: "30m", KeepLast: 2}
-	c.Restic = "not-installed"
-	if err := os.Remove(c.PasswordFile); err != nil {
-		t.Fatal(err)
-	}
 	file := filepath.Join(c.Source, "FILEA.JSON")
 	if err := os.WriteFile(file, []byte("initial"), 0600); err != nil {
 		t.Fatal(err)
@@ -73,7 +69,7 @@ func TestTarSnapshotsArePortableRetainedAndRecoverable(t *testing.T) {
 			t.Fatal("old archive was not expired")
 		}
 	}
-	// A regular gzip/tar reader can open the S3 object without a password or Restic.
+	// A standard gzip/tar reader can open the S3 object independently.
 	obj, err := backend.GetObject("backups", records[0].Key, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +141,7 @@ func TestTarSnapshotsArePortableRetainedAndRecoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("check")
-	// Source data and the password are both unnecessary for archive recovery.
+	// Archive recovery does not require the original source data.
 	if err := os.RemoveAll(c.Source); err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +310,7 @@ func TestTarRestoreRejectsUnsafeOrCorruptArchivesAtomically(t *testing.T) {
 	}
 }
 
-func TestSnapshotFormatChangeIsImmediatelyDue(t *testing.T) {
+func TestLegacySnapshotStatusSchedulesTarImmediately(t *testing.T) {
 	c := testConfig(t)
 	c.Snapshots.Enabled = true
 	s := New(c, io.Discard, io.Discard)
@@ -322,76 +318,7 @@ func TestSnapshotFormatChangeIsImmediatelyDue(t *testing.T) {
 	if err := writeJSON(s.statePath("status.json"), status); err != nil {
 		t.Fatal(err)
 	}
-	if s.snapshotDue(time.Now()) {
-		t.Fatal("existing Restic snapshot unexpectedly due")
-	}
-	s.cfg.Snapshots.Format = "tar"
 	if !s.snapshotDue(time.Now()) || s.snapshotDeadline(time.Now()).After(time.Now().Add(time.Second)) {
-		t.Fatal("format change did not schedule a new recovery point")
-	}
-}
-
-func TestTarAndResticHistoryCoexist(t *testing.T) {
-	if _, err := exec.LookPath("restic"); err != nil {
-		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {
-			t.Fatal(err)
-		}
-		t.Skip("restic not installed")
-	}
-	c := testConfig(t)
-	c.Snapshots.Enabled = true
-	c.Snapshots.Format = "tar"
-	s := New(c, io.Discard, io.Discard)
-	ctx := context.Background()
-	if err := os.WriteFile(filepath.Join(c.Source, "file.txt"), []byte("portable"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for _, command := range []string{"register-source", "snapshot"} {
-		if err := s.Run(ctx, []string{command}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s.cfg.Snapshots.Format = "restic"
-	for _, command := range []string{"init", "snapshot", "check"} {
-		if err := s.Run(ctx, []string{command}); err != nil {
-			t.Fatalf("switch to Restic %s: %v", command, err)
-		}
-	}
-	var encrypted Status
-	if err := readJSON(s.statePath("status.json"), &encrypted); err != nil {
-		t.Fatal(err)
-	}
-	password, err := os.ReadFile(c.PasswordFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(c.PasswordFile, []byte("wrong-password"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	badTarget := filepath.Join(c.RestoreRoot, "wrong-password")
-	if err := s.Run(ctx, []string{"restore", "--snapshot", encrypted.SnapshotID, "--target", badTarget}); err == nil {
-		t.Fatal("encrypted history restored without its original password")
-	}
-	if _, err := os.Stat(badTarget); !os.IsNotExist(err) {
-		t.Fatal("wrong password exposed a recovery directory")
-	}
-	if err := os.WriteFile(c.PasswordFile, password, 0600); err != nil {
-		t.Fatal(err)
-	}
-	s.cfg.Snapshots.Format = "tar"
-	if err := s.Run(ctx, []string{"check"}); err != nil {
-		t.Fatal("Restic initialization changed existing TAR history:", err)
-	}
-	reg, err := s.registration(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := s.archives(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	records, err := store.ArchiveList(ctx, archiveScope(reg))
-	if err != nil || len(records) != 1 {
-		t.Fatal("format switching lost archive history")
+		t.Fatal("legacy snapshot status did not schedule a TAR recovery point")
 	}
 }

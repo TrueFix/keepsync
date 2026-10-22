@@ -1,258 +1,198 @@
 # Advanced configuration and recovery
 
-The README's configuration uses portable, unencrypted TAR snapshots every 30
-minutes. This guide covers encrypted snapshots and additional controls.
-
-The examples use `mayankfawkes/keepsync:0.3.6`. To test a local build instead, run
-`make image VERSION=dev` and set `KEEPSYNC_IMAGE=keepsync:test`.
-
-## Encrypted Restic configuration
-
-[`compose.advanced.yaml`](../compose.advanced.yaml) is a complete configuration;
-use it by itself with `docker compose -f compose.advanced.yaml ...`.
-It enables Live uploads plus encrypted Restic snapshots. Its default schedule is
-24 hours with 14 recovery points. Explicit `.env` values override those defaults.
-
-### Set the encryption password
-
-Write your chosen strong password as one line in `secrets/restic_password`, or
-generate one on the host:
-
-```bash
-mkdir -p secrets
-(umask 077; openssl rand -base64 32 > secrets/restic_password)
-sudo chown 10001:10001 secrets/restic_password
-```
-
-The last command grants the default container user access on Linux without making
-the password world-readable. Match ownership to your container user if you change
-its UID/GID. Keep an offline copy: **without the password, Restic history cannot
-be restored**. Reuse the same file on replacement machines; overwriting the file
-does not rotate an existing repository's password.
-
-The advanced Compose file mounts the password as a secret and selects:
-
-```yaml
-environment:
-  KEEPSYNC_SNAPSHOTS_ENABLED: "true"
-  KEEPSYNC_SNAPSHOT_FORMAT: restic
-  KEEPSYNC_PASSWORD_FILE: /run/secrets/restic_password
-secrets:
-  - restic_password
-```
-
-The password protects Restic snapshots only. TAR snapshots do not use it, and
-Live uploads remain ordinary objects using the bucket's encryption settings.
-
-### Initialize and start
-
-Set `KEEPSYNC_TARGET`, the source path, and AWS credentials in your shell or `.env`.
-UID `10001` only needs read access to the source. Startup initializes a fresh
-target and its state automatically, keeping the source mount read-only. An empty
-source is monitored until the application creates files.
+KeepSync 0.4.0 uses one snapshot engine: portable `.tar.gz` archives. Live mode
+and daily snapshots are enabled by default; no initialization or password is
+required. [`compose.advanced.yaml`](../compose.advanced.yaml) exposes optional
+controls. Use it on its own, not as an override:
 
 ```bash
 docker compose -f compose.advanced.yaml up -d keepsync
 ```
 
-The encrypted repository is initialized automatically when the first snapshot
-runs. The mounted password is still required. Existing bound repositories are
-verified rather than recreated. Live uploads remain independent of snapshot
-password or repository failures.
-
-## Recover encrypted history
-
-### With the state volume available
-
-Mount the original password, use the same target/dataset, and select `restic`.
-Create a recovery directory writable by the container user, then:
-
-```bash
-docker compose -f compose.advanced.yaml run --rm keepsync snapshots
-docker compose -f compose.advanced.yaml run --rm --volume ./recovery:/restore keepsync \
-  restore --snapshot <snapshot-id> --target /restore/recovered
-```
-
-For the default source, files appear under `./recovery/recovered/data`. Restic
-preserves the original source path beneath the destination if you customize it.
-Restoring does not require the original source files to exist, but Compose still
-requires an existing host directory for its source mount.
-
-### Without the state volume or original machine
-
-Use Restic directly; its repository is self-contained. You need S3 access, the
-repository URL, and the original password. Do not initialize a new repository.
-
-With Restic installed on the recovery machine:
-
-```bash
-export RESTIC_REPOSITORY=s3:https://s3.amazonaws.com/your-bucket/backups/app/Snapshots
-export RESTIC_PASSWORD_FILE=/absolute/path/to/restic_password
-export AWS_ACCESS_KEY_ID=your-access-key
-export AWS_SECRET_ACCESS_KEY=your-secret-key
-export AWS_DEFAULT_REGION=us-east-1
-
-restic snapshots --tag keepsync:files
-restic restore <snapshot-id> --target ./recovery --verify
-```
-
-Use `keepsync:<your-dataset>` for the tag. For S3-compatible providers, replace
-the endpoint in the repository URL, for example
-`s3:https://s3.example.com/bucket/prefix/Snapshots`.
-
-TAR history needs neither local state nor a password: download the archive and
-run `tar -xzf snapshot.tar.gz -C ./recovery`. Its `data/` directory contains the
-files and a recoverable identity marker. KeepSync's Restic restore adds the same
-marker; standalone Restic recovery can obtain the ID from the snapshot's
-`keepsync-source:<id>` tag if the recovered data has no marker. Save that ID as
-`.keepsync-source-id` in the recovered source before reconnecting to the same
-target without the original state. Older manually registered backups already
-contain that marker.
-
-Review the recovery and adjust ownership for the application before promoting
-it to live data. Preserve the original state volume when returning data to the
-same path. KeepSync verifies the restored marker before accepting a replaced
-source directory. Ordinary operation never needs to write into the source.
-
-## Choosing a format
-
-| Format | Storage | Password | Recovery |
-|---|---|---|---|
-| `tar` | `.tar.gz` archives and matching `.json` sidecars directly under `snapshots/` | None | Any standard TAR/GZIP extractor, or KeepSync |
-| `restic` | Encrypted, deduplicated repository under `Snapshots/` | Required | KeepSync or Restic |
-
-The default format remains `restic` for compatibility; the minimal Compose
-example explicitly selects `tar`. Switching formats preserves both histories,
-keeps retention separate, and schedules a point in the new format. Select the
-matching format when listing, checking, or restoring history. New snapshots can
-be disabled while existing history remains restorable.
-
-TAR filenames are `<UTC timestamp>-<random>.tar.gz`, with a JSON file using the
-same base name. The sidecar records the dataset, source ID, source path,
-creation time, compressed size, and SHA-256. There are no dataset/source folders
-in the new layout. The JSON is published last; incomplete pairs are not listed
-or counted toward retention. Source information is still checked before
-listing, restoring, or deleting a point, so another source's files are untouched.
-The TAR's internal manifest keeps it independently recoverable on a PC.
-
-Archives from `0.3.0`/`0.3.1` under
-`Snapshots/tar/<dataset>/<source-id>/` remain accessible without being moved.
-Listing and retention include both layouts. Expiring a recovery point removes
-its archive and sidecar, if present; Restic's repository layout is unchanged.
-
-TAR includes regular files, directories, and relative symlinks that stay inside
-`data/`; unsafe links and special files cause the attempt to fail without
-expiring older points. KeepSync's TAR restore rejects traversal, hard links,
-symlink traversal, duplicate files, and corrupt GZIP data. It restores regular
-permissions without privileged mode bits; use Restic where richer filesystem
-metadata preservation is required.
-
-## Environment reference
+## Configuration reference
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `KEEPSYNC_TARGET` | Required | `s3://bucket/prefix`; absolute paths are also supported for local testing |
+| `KEEPSYNC_TARGET` | Required | `s3://bucket/prefix`; absolute paths also work for local testing |
 | `KEEPSYNC_DATASET` | `files` | Stable dataset name |
-| `KEEPSYNC_SOURCE_PATH` | `/data` | Source path inside the container |
-| `KEEPSYNC_METHOD` | `interval` | `live` or `interval` |
-| `KEEPSYNC_INTERVAL` | `1h` | Full reconciliation interval; fallback in Live mode |
-| `KEEPSYNC_DEBOUNCE` | `2s` | Quiet period before processing changes |
+| `KEEPSYNC_SOURCE_PATH` | `/data` | Source inside the container |
+| `KEEPSYNC_STATE_DIR` | `/var/lib/keepsync` | Persistent identity, index, status, and staging |
+| `KEEPSYNC_RESTORE_ROOT` | `/restore` | Parent of explicit restore destinations |
+| `KEEPSYNC_METHOD` | `live` | `live` for watched changes; `interval` for scheduled scans only |
+| `KEEPSYNC_INTERVAL` | `1h` | Full local/remote reconciliation schedule |
+| `KEEPSYNC_DEBOUNCE` | `2s` | Quiet period before a live batch |
 | `KEEPSYNC_MAX_WAIT` | `30s` | Maximum batching delay during continuous changes |
-| `KEEPSYNC_WATCH_MODE` | `auto` | Native events normally; polling on network/FUSE/9P volumes. Override with `native` or `poll`. |
-| `KEEPSYNC_WATCH_INTERVAL` | `5s` | Metadata polling interval when polling is selected |
-| `KEEPSYNC_MAX_WATCHES` | `8192` | Directory-watch limit; switches to metadata polling if reached |
-| `KEEPSYNC_SNAPSHOTS_ENABLED` | `false` | Enable scheduled recovery points |
-| `KEEPSYNC_SNAPSHOT_FORMAT` | `restic` | `tar` for portable archives, `restic` for encryption/deduplication |
-| `KEEPSYNC_SNAPSHOT_INTERVAL` | `24h` | Delay after the last successful snapshot completes |
-| `KEEPSYNC_SNAPSHOT_RETAIN` | `7` | Confirmed recovery points retained in the selected format |
-| `KEEPSYNC_PASSWORD_FILE` | `/run/secrets/restic_password` | Restic password file; unused by TAR |
-| `KEEPSYNC_STATE_DIR` | `/var/lib/keepsync` | Persistent identity, index, status, and transfer staging |
-| `KEEPSYNC_RESTORE_ROOT` | `/restore` | Parent for explicit restore destinations |
-| `KEEPSYNC_DELETE_REMOTE` | `false` | Remove tracked Live objects when their source files disappear |
+| `KEEPSYNC_WATCH_MODE` | `auto` | `native`, `poll`, or automatic filesystem selection |
+| `KEEPSYNC_WATCH_INTERVAL` | `5s` | Metadata polling interval |
+| `KEEPSYNC_MAX_WATCHES` | `8192` | Directory-watch limit before polling fallback |
+| `KEEPSYNC_SNAPSHOTS_ENABLED` | `true` | Create scheduled snapshots |
+| `KEEPSYNC_SNAPSHOT_INTERVAL` | `24h` | Delay after the last successful snapshot |
+| `KEEPSYNC_SNAPSHOT_RETAIN` | `14` | Successful recovery points to keep |
+| `KEEPSYNC_DELETE_REMOTE` | `false` | Delete tracked Live objects when local files disappear |
 | `KEEPSYNC_EXCLUDES` | None | JSON array, e.g. `["**/.cache/**","**/node_modules/**"]` |
-| `KEEPSYNC_S3_ENDPOINT` | None | S3-compatible HTTP(S) origin, without a bucket or path |
+| `KEEPSYNC_S3_ENDPOINT` | None | S3-compatible HTTP(S) origin without bucket/path |
 | `KEEPSYNC_LOG_FORMAT` | `text` | `text` or `json` |
 | `KEEPSYNC_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
-| `KEEPSYNC_LOG_FILES` | `true` | Log each confirmed Live upload |
-| `KEEPSYNC_LOG_COLOR` | `true` | Color compact text logs; `NO_COLOR` also disables color. JSON never contains ANSI. |
+| `KEEPSYNC_LOG_FILES` | `true` | Per-file upload logs; false gives batch summaries |
+| `KEEPSYNC_LOG_COLOR` | `true` | Colored text; `NO_COLOR` also disables it |
 
-## Multiple host paths under one Compose project
+Standard AWS credential variables, including `AWS_SESSION_TOKEN`, are supported.
+Set `AWS_DEFAULT_REGION` for the provider. `KEEPSYNC_SNAPSHOT_FORMAT=tar` is
+accepted for existing deployments but is unnecessary; other formats are rejected.
 
-State-mode identity is tied to the device and inode of the directory mounted
-at `/data` itself, captured once in `registration.json` as `source_file_id`.
-A genuine bind mount (`- ./source:/data:ro`) keeps that stable across restarts,
-image updates, and `--force-recreate`. Combining several host paths into one
-`/data` by mounting each of them separately under an unmounted parent (for
-example `- ./data:/data/data:ro` plus `- ./config:/data/config:ro`, with no
-mount for `/data` itself) does not: `/data` is then a container-filesystem
-directory, not a bind mount, and the container runtime does not guarantee it
-reuses the same device/inode on every recreation. The symptom is `ERROR
-backup: source volume changed; existing backup identity preserved` after an
-otherwise ordinary `docker compose pull && up`.
+The minimal Compose file exposes common settings; the advanced file exposes
+watcher, exclusion, logging, and resource controls too. Environment variables
+must be passed into the container, not merely added to a host `.env` unless the
+Compose file references them.
 
-Run one KeepSync sidecar per real host path instead, each with its own
-`KEEPSYNC_TARGET` prefix and its own `/var/lib/keepsync` state volume:
+### S3-compatible storage
 
 ```yaml
-  keepsync-data:
-    image: mayankfawkes/keepsync:0.3.6
-    environment:
-      KEEPSYNC_TARGET: s3://your-bucket/backups/app/data
-    volumes:
-      - ./data:/data:ro
-      - keepsync-data-state:/var/lib/keepsync
-
-  keepsync-config:
-    image: mayankfawkes/keepsync:0.3.6
-    environment:
-      KEEPSYNC_TARGET: s3://your-bucket/backups/app/config
-    volumes:
-      - ./config:/data:ro
-      - keepsync-config-state:/var/lib/keepsync
+environment:
+  KEEPSYNC_TARGET: s3://your-bucket/backups/app
+  KEEPSYNC_S3_ENDPOINT: https://region.storage.example.com
+  AWS_DEFAULT_REGION: your-region
 ```
 
-Or, if the host paths already share a common parent directory outside Compose
-(e.g. both `data/` and `config/` live under `./source/`), bind-mount that
-single parent instead and keep one sidecar.
+### Reconciliation and deletion
 
-## Everyday reconciliation speed
+Live events watch local files. Remote changes are discovered during a full scan
+at startup or every `KEEPSYNC_INTERVAL`; unchanged files are checked with S3
+`HEAD` requests. A missing object is re-uploaded if its local source still exists.
+`10s` gives frequent repair scans at the cost of more requests. This does not
+change the snapshot schedule or the local-event debounce.
 
-`KEEPSYNC_INTERVAL` also controls how quickly a file deleted directly from the
-remote target (outside KeepSync) gets noticed and re-uploaded: deletion isn't
-pushed to KeepSync, so it's only caught on the next full reconciliation scan,
-which runs every `KEEPSYNC_INTERVAL` (default `1h`) and verifies remote
-metadata with a `HEAD` request per file, independent of Live-mode's
-filesystem-event path. Lowering it (e.g. `10s`) trades more S3 request volume
-for faster drift correction; it does not affect how quickly local changes are
-uploaded in Live mode, which is governed by `KEEPSYNC_DEBOUNCE`/`KEEPSYNC_MAX_WAIT`.
+With `KEEPSYNC_DELETE_REMOTE=false`, local deletions are logged and their S3
+copies are retained. Enable it to mirror tracked deletions. Only paths in the
+persisted index can be removed; an empty full scan never becomes a deletion sweep.
+KeepSync does not synchronize remote changes back into the local source or
+automatically delete unknown remote objects.
 
-The watcher processes create/edit/rename/remove events recursively. A tracked
-delete can be handled even when it removes the final file; an empty full scan
-still does not sweep remote objects. With `KEEPSYNC_DELETE_REMOTE=false`, deletion
-is detected and logged as kept on S3. To mirror tracked deletions, enable it.
-In polling mode, only size/time/inode metadata is scanned; unchanged file data is
-not repeatedly read. The poller skips scans while an upload/snapshot is active.
+Native watching handles creates, edits, atomic saves, renames, and removals
+recursively. Network/FUSE/9P filesystems and watch-limit exhaustion fall back to
+metadata polling. Set `KEEPSYNC_WATCH_MODE=poll` if events are unreliable.
 
-Runtime defaults and example limits are distinct: both Compose examples select
-Live mode explicitly. The minimal file selects TAR/30m/7; the advanced file selects
-Restic/24h/14 unless applicable `.env` values override the schedule or count.
+## Multiple folders in one backup
 
-`GOMEMLIMIT` is a soft Go heap target, not a process-memory limit. The image sets
-64 MiB for the sidecar and `KEEPSYNC_SNAPSHOT_MEMORY_LIMIT=128MiB` for the Restic
-subprocess. `KEEPSYNC_CPUS` and `KEEPSYNC_MEMORY_LIMIT` configure the provided
-Compose examples' hard CPU/memory limits. Larger repositories may need a larger
-memory limit. TAR creation/downloads use disk-backed staging; allow space for a
-complete compressed snapshot and for restored files.
+Use one persistent host directory containing the folders:
+
+```text
+app/
+  compose.yaml
+  source/
+    data/
+    config/
+```
+
+The application can mount each child separately while KeepSync mounts the parent:
+
+```yaml
+# Application service:
+volumes:
+  - ./source/data:/app/data
+  - ./source/config:/app/config
+
+# KeepSync service:
+volumes:
+  - ./source:/data:ro
+  - state:/var/lib/keepsync
+```
+
+KeepSync's automatic source identity records the source directory's device/inode.
+Mounting only `/data/data` and `/data/config` leaves `/data` in the container
+filesystem, where its identity can change on recreation. The symptom is
+`source volume changed; existing backup identity preserved`. A real parent bind
+mount avoids this. Named source volumes also provide a persistent source root.
+Keep state outside the source, and keep its volume name stable across upgrades.
+
+If separate sidecars are needed, give each its own target and state volume.
+Omit `container_name` to let Compose generate project-scoped names.
+
+## Identity recovery
+
+| Missing state | Action |
+|---|---|
+| Remote marker only | Recreated automatically from trusted local registration |
+| Local state only | Stop the sidecar, run `reclaim`, start again |
+| Local state and remote marker | Explicit `reclaim --force` after verifying ownership |
+
+`reclaim` refuses an existing registration and never runs automatically. Do not
+delete healthy state to fix a misconfigured source mount. A changed source
+directory is accepted only with the matching recovery identity marker.
+
+TAR archives include the source identity for recovery. Extracted files live under
+`data/`, including `.keepsync-source-id`. KeepSync can verify that marker when
+reconnecting recovered data. Preserve the original state whenever possible.
+
+## Archives, retention, and restores
+
+New archives are flat pairs under `snapshots/`:
+
+```text
+snapshots/<UTC timestamp>-<random>.tar.gz
+snapshots/<UTC timestamp>-<random>.json
+```
+
+Metadata records the dataset, source identity, creation time, compressed size,
+and SHA-256. JSON is published last; incomplete pairs are not recovery points.
+The TAR also contains `keepsync.json`, so it can be recovered independently.
+Older nested TAR history remains readable and eligible for retention.
+
+Retention counts recovery points, removes matching archive/metadata pairs, and
+runs only after a successful snapshot. It never prunes Live files or another
+source's snapshots. `prune` requires a successful current-format snapshot status.
+
+TAR preserves regular permissions and safe relative symlinks. Special files and
+unsafe links fail the snapshot. Restore rejects traversal, hard links, duplicate
+files, symlink traversal, and corrupt archives. It verifies in a temporary
+directory before publishing the destination, and requires a new/empty directory
+under `KEEPSYNC_RESTORE_ROOT` outside source/state paths.
+
+```bash
+docker compose run --rm keepsync snapshots
+docker compose run --rm keepsync check
+docker compose run --rm --volume ./recovery:/restore keepsync \
+  restore --snapshot <exact-filename.tar.gz> --target /restore/recovered
+```
+
+Existing snapshots remain listable, checkable, and restorable with new snapshots
+disabled. If the machine/state is lost, download a TAR and extract it directly;
+manual extraction requires no local registration.
+
+## Resources and database backups
+
+The non-root scratch image contains the KeepSync executable and TLS roots.
+`GOMEMLIMIT=64MiB` is a soft Go heap target; Compose's `mem_limit` is the hard
+process limit. Uploads stage one file at a time. Snapshots/downloads use disk
+staging: allow room for a complete compressed archive and restored files.
+No-op scans are quiet; use debug logging for scan diagnostics.
+
+File stabilization is not a transaction across database files. SQLite database
+and WAL copies taken at different times may be inconsistent. Use the database's
+native backup/dump facility or a consistent filesystem snapshot, and point
+KeepSync at the resulting backup files when transactional recovery is required.
 
 ## JSON configuration
 
-For a complete file-based configuration, mount
-[`config.example.json`](../config.example.json) and set:
+Mount [`config.example.json`](../config.example.json) and select it explicitly:
 
 ```yaml
 command: ["--config", "/etc/keepsync/config.json", "serve"]
 ```
 
-Pass `--config /etc/keepsync/config.json` before every management command too.
-The file replaces KeepSync environment configuration; AWS credentials and the
-runtime memory settings still use their standard environment variables.
+Pass `--config /etc/keepsync/config.json` before management commands too. JSON
+replaces KeepSync environment configuration; AWS credentials and runtime memory
+settings still use their standard environment variables. Unknown fields fail
+validation.
+
+## Upgrade from encrypted snapshots
+
+0.4.0 removes the encrypted snapshot engine, bundled binary, password settings,
+and repository initialization. Remove `password_file` and `restic` from old JSON
+configuration; remove password mounts/environment variables from Compose. Omit
+the snapshot format or set it to `tar`. Keep your existing source/state/target.
+
+Old encrypted repositories are left untouched and are not converted. Recover
+them using a separately installed Restic and the original password. Do not
+delete that history or its password until you have verified your replacement
+TAR recovery points. Historical changelog entries describe older releases.

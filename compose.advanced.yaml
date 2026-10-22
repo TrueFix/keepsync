@@ -1,7 +1,7 @@
-# Complete encrypted configuration. Use this file on its own, not as an override.
+# Complete optional settings. Use this file on its own, not as an override.
 services:
   keepsync:
-    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.3.6}
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.4.0}
     restart: unless-stopped
     read_only: true
     cpus: ${KEEPSYNC_CPUS:-0.5}
@@ -19,11 +19,9 @@ services:
       KEEPSYNC_WATCH_MODE: ${KEEPSYNC_WATCH_MODE:-auto}
       KEEPSYNC_WATCH_INTERVAL: ${KEEPSYNC_WATCH_INTERVAL:-5s}
       KEEPSYNC_MAX_WATCHES: ${KEEPSYNC_MAX_WATCHES:-8192}
-      KEEPSYNC_SNAPSHOTS_ENABLED: "true"
-      KEEPSYNC_SNAPSHOT_FORMAT: restic
+      KEEPSYNC_SNAPSHOTS_ENABLED: ${KEEPSYNC_SNAPSHOTS_ENABLED:-true}
       KEEPSYNC_SNAPSHOT_INTERVAL: ${KEEPSYNC_SNAPSHOT_INTERVAL:-24h}
       KEEPSYNC_SNAPSHOT_RETAIN: ${KEEPSYNC_SNAPSHOT_RETAIN:-14}
-      KEEPSYNC_PASSWORD_FILE: /run/secrets/restic_password
       KEEPSYNC_EXCLUDES: '${KEEPSYNC_EXCLUDES:-["**/.cache/**","**/node_modules/**"]}'
       KEEPSYNC_DELETE_REMOTE: ${KEEPSYNC_DELETE_REMOTE:-false}
       KEEPSYNC_S3_ENDPOINT: ${KEEPSYNC_S3_ENDPOINT:-}
@@ -34,7 +32,6 @@ services:
       NO_COLOR: ${NO_COLOR:-}
       GOMAXPROCS: "1"
       GOMEMLIMIT: ${KEEPSYNC_GO_MEMORY_LIMIT:-64MiB}
-      KEEPSYNC_SNAPSHOT_MEMORY_LIMIT: ${KEEPSYNC_SNAPSHOT_MEMORY_LIMIT:-128MiB}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
@@ -47,17 +44,9 @@ services:
         bind:
           create_host_path: false
       - state:/var/lib/keepsync
-      - cache:/cache
-    secrets:
-      - restic_password
     tmpfs:
       - /tmp:mode=1777,size=16m
     stop_grace_period: 1m
 
-secrets:
-  restic_password:
-    file: ./secrets/restic_password
-
 volumes:
   state:
-  cache:

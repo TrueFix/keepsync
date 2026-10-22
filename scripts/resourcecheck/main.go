@@ -68,7 +68,7 @@ func run() error {
 			env = append(env, v)
 		}
 	}
-	env = append(env, "KEEPSYNC_TARGET=s3://backups/resources", "KEEPSYNC_S3_ENDPOINT="+server.URL, "KEEPSYNC_SOURCE_PATH="+source, "KEEPSYNC_STATE_DIR="+state, "KEEPSYNC_RESTORE_ROOT="+filepath.Join(root, "restore"), "KEEPSYNC_PASSWORD_FILE="+filepath.Join(root, "unused-password"), "KEEPSYNC_METHOD=live", "KEEPSYNC_INTERVAL=1h", "KEEPSYNC_SNAPSHOTS_ENABLED=false", "KEEPSYNC_LOG_FILES=false", "AWS_ACCESS_KEY_ID=test", "AWS_SECRET_ACCESS_KEY=test", "AWS_REGION=us-east-1", "GOMAXPROCS=1", "GOMEMLIMIT=64MiB")
+	env = append(env, "KEEPSYNC_TARGET=s3://backups/resources", "KEEPSYNC_S3_ENDPOINT="+server.URL, "KEEPSYNC_SOURCE_PATH="+source, "KEEPSYNC_STATE_DIR="+state, "KEEPSYNC_RESTORE_ROOT="+filepath.Join(root, "restore"), "KEEPSYNC_METHOD=live", "KEEPSYNC_INTERVAL=1h", "KEEPSYNC_SNAPSHOTS_ENABLED=false", "KEEPSYNC_LOG_FILES=false", "AWS_ACCESS_KEY_ID=test", "AWS_SECRET_ACCESS_KEY=test", "AWS_REGION=us-east-1", "GOMAXPROCS=1", "GOMEMLIMIT=64MiB")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, "serve")

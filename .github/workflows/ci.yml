@@ -31,17 +31,7 @@ jobs:
           go-version-file: go.mod
           check-latest: true
           cache: false
-      - name: Install Restic
-        run: |
-          go run ./scripts/resticbuild -output "$(go env GOPATH)/bin/restic"
-          restic version
-      - name: Test backup engine compatibility
-        run: |
-          go -C tools/restic mod verify
-          go run ./scripts/resticbuild -action test
       - name: Format, vet, race and recovery tests
-        env:
-          KEEPSYNC_REQUIRE_INTEGRATION: '1'
         run: make check
       - name: Build versioned CLI
         run: |
@@ -78,7 +68,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
         run: |
           docker run --rm keepsync:test version
-          docker run --rm --entrypoint restic keepsync:test version
           docker compose config --quiet
           docker compose -f compose.advanced.yaml config --quiet
           bash scripts/docker-smoke.sh keepsync:test
@@ -103,8 +92,6 @@ jobs:
           check-latest: true
           cache: false
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-      - name: Scan Restic dependencies
-        run: go run ./scripts/resticbuild -action scan
 
   workflows:
     name: Workflow and shell lint

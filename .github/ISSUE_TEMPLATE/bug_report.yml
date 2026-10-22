@@ -19,4 +19,4 @@ body:
     id: environment
     attributes:
       label: Environment and logs
-      description: OS, Docker/Restic version, sanitized configuration and relevant errors.
+      description: OS, Docker/KeepSync version, sanitized configuration and relevant errors.

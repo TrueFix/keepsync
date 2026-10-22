@@ -77,17 +77,6 @@ func parseTarget(value, endpoint string) (target, error) {
 	return t, nil
 }
 
-func (t target) snapshots() string {
-	if t.local != "" {
-		return filepath.Join(t.local, "Snapshots")
-	}
-	endpoint := strings.TrimSuffix(t.endpoint, "/")
-	if endpoint == "" {
-		endpoint = "https://s3.amazonaws.com"
-	}
-	return "s3:" + endpoint + "/" + t.bucket + "/" + path.Join(t.prefix, "Snapshots")
-}
-
 type liveStore interface {
 	Empty(context.Context) (bool, error)
 	Bind(context.Context, string) error

@@ -8,6 +8,6 @@ vulnerability** feature for this repository. If private reporting is unavailable
 contact the maintainer at **mkgupta74d@gmail.com**. Include the affected version,
 reproduction steps, impact, and a minimal example with secrets removed.
 
-Do not post credentials, repository passwords, or private backup contents in a
-public issue. Keep an offline recovery copy of the encryption password and test
-your restoration procedure.
+Do not post credentials or private backup contents in a public issue. Live files
+and TAR snapshots are not encrypted by KeepSync; use your storage provider's
+access controls and encryption settings. Test your restoration procedure.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -106,16 +105,10 @@ func TestRunLoopWaitsForStateVolumeWithoutErrorSpam(t *testing.T) {
 }
 
 func TestSnapshotsRunWithoutLiveChanges(t *testing.T) {
-	if _, err := exec.LookPath("restic"); err != nil {
-		if os.Getenv("KEEPSYNC_REQUIRE_INTEGRATION") == "1" {
-			t.Fatal(err)
-		}
-		t.Skip("restic not installed")
-	}
 	c := testConfig(t)
 	c.Method = "interval"
 	c.Interval = "1h"
-	c.Snapshots = SnapshotConfig{Enabled: true, Format: "restic", Interval: "1s", KeepLast: 2}
+	c.Snapshots = SnapshotConfig{Enabled: true, Format: "tar", Interval: "1s", KeepLast: 2}
 	c.LogFormat = "json"
 	c.LogLevel = "debug"
 	var logs safeLog
@@ -142,7 +135,7 @@ func TestSnapshotsRunWithoutLiveChanges(t *testing.T) {
 			t.Error("scheduler did not stop")
 		}
 	}()
-	waitFor(t, 30*time.Second, func() bool { return logs.count("Snapshot retention complete") >= 2 })
+	waitFor(t, 30*time.Second, func() bool { return logs.count("Snapshot saved") >= 2 })
 	if logs.count("Live backup complete") != 1 {
 		t.Fatal("snapshot schedule triggered extra Live reconciliations")
 	}
@@ -197,22 +190,5 @@ func TestChangedBatchIsScopedAndBounded(t *testing.T) {
 	paths, full = changes.take()
 	if !full || len(paths) != 0 {
 		t.Fatal("unbounded changed-path queue")
-	}
-}
-
-func TestSnapshotProgressMemoryIsBounded(t *testing.T) {
-	var output snapshotOutput
-	for i := 0; i < 10000; i++ {
-		_, _ = output.Write([]byte("{\"message_type\":\"status\",\"percent_done\":0.5}\n"))
-	}
-	_, _ = output.Write([]byte("{\"message_type\":\"summary\",\"snapshot_id\":\"abc123\",\"data_added_packed\":20}\n"))
-	if output.err != nil || output.summary.SnapshotID != "abc123" || cap(output.line) > 1<<20 {
-		t.Fatal("progress collector grew with backup duration")
-	}
-	var capped cappedOutput
-	capped.limit = 32
-	_, _ = capped.Write([]byte(strings.Repeat("x", 1000)))
-	if len(capped.data) != 32 || !capped.truncated {
-		t.Fatal("error output is not bounded")
 	}
 }

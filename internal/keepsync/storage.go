@@ -19,7 +19,6 @@ type Registration struct {
 	Source       string `json:"source"`
 	SourceID     string `json:"source_id"`
 	Repository   string `json:"repository"`
-	RepositoryID string `json:"repository_id"`
 	IdentityMode string `json:"identity_mode,omitempty"`
 	SourceFileID string `json:"source_file_id,omitempty"`
 }

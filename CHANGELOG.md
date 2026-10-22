@@ -2,6 +2,19 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.4.0 — 2026-10-22
+
+### Changed
+
+- Default to live uploads and automatic daily TAR snapshots with 14 recovery points. Only the source mount, persistent state, target, and S3 credentials are needed for setup.
+- Simplify the quick-start Compose file, align schedules across examples, and rewrite the main/advanced guides around one backup and restore workflow.
+- Keep existing Live data, source registrations, and TAR histories compatible. Legacy encrypted snapshot status schedules a fresh TAR recovery point.
+
+### Removed
+
+- Restic/encrypted snapshots, password configuration, repository initialization, subprocess handling, bundled binary, build tooling, and dedicated dependency/CI jobs.
+- Encrypted snapshot recovery from KeepSync. Existing encrypted repositories are untouched; recovery requires a separately installed Restic and the original password. Explicit non-TAR format settings must be removed or changed to `tar` before upgrading.
+
 ## 0.3.6 — 2026-10-22
 
 ### Added

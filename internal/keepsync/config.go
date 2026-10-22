@@ -25,7 +25,6 @@ type Config struct {
 	Dataset       string         `json:"dataset"`
 	Source        string         `json:"source"`
 	Repository    string         `json:"repository"`
-	PasswordFile  string         `json:"password_file"`
 	StateDir      string         `json:"state_dir"`
 	RestoreRoot   string         `json:"restore_root"`
 	Method        string         `json:"method"`
@@ -35,7 +34,6 @@ type Config struct {
 	MaxWatches    int            `json:"max_watches"`
 	WatchMode     string         `json:"watch_mode"`
 	WatchInterval string         `json:"watch_interval"`
-	Restic        string         `json:"restic"`
 	Excludes      []string       `json:"excludes"`
 	DeleteRemote  bool           `json:"delete_remote"`
 	S3Endpoint    string         `json:"s3_endpoint"`
@@ -48,11 +46,11 @@ type Config struct {
 
 func defaultConfig() Config {
 	return Config{
-		Dataset: "files", Source: "/data", PasswordFile: "/run/secrets/restic_password",
-		StateDir: "/var/lib/keepsync", RestoreRoot: "/restore", Method: "interval",
-		Interval: "1h", Debounce: "2s", MaxWait: "30s", MaxWatches: 8192, WatchMode: "auto", WatchInterval: "5s", Restic: "restic",
+		Dataset: "files", Source: "/data",
+		StateDir: "/var/lib/keepsync", RestoreRoot: "/restore", Method: "live",
+		Interval: "1h", Debounce: "2s", MaxWait: "30s", MaxWatches: 8192, WatchMode: "auto", WatchInterval: "5s",
 		LogFormat: "text", LogLevel: "info", LogFiles: true, LogColor: true,
-		Snapshots: SnapshotConfig{Format: "restic", Interval: "24h", KeepLast: 7},
+		Snapshots: SnapshotConfig{Enabled: true, Format: "tar", Interval: "24h", KeepLast: 14},
 	}
 }
 
@@ -81,7 +79,7 @@ func loadEnvironment() (Config, error) {
 	c := defaultConfig()
 	for key, dest := range map[string]*string{
 		"KEEPSYNC_DATASET": &c.Dataset, "KEEPSYNC_SOURCE_PATH": &c.Source,
-		"KEEPSYNC_PASSWORD_FILE": &c.PasswordFile, "KEEPSYNC_STATE_DIR": &c.StateDir,
+		"KEEPSYNC_STATE_DIR":    &c.StateDir,
 		"KEEPSYNC_RESTORE_ROOT": &c.RestoreRoot, "KEEPSYNC_METHOD": &c.Method,
 		"KEEPSYNC_INTERVAL": &c.Interval, "KEEPSYNC_DEBOUNCE": &c.Debounce,
 		"KEEPSYNC_MAX_WAIT": &c.MaxWait, "KEEPSYNC_LOG_FORMAT": &c.LogFormat,
@@ -136,13 +134,13 @@ func (c Config) Validate() error {
 	if _, err := parseTarget(c.Repository, c.S3Endpoint); err != nil {
 		return err
 	}
-	for name, path := range map[string]string{"source": c.Source, "state_dir": c.StateDir, "restore_root": c.RestoreRoot, "password_file": c.PasswordFile} {
+	for name, path := range map[string]string{"source": c.Source, "state_dir": c.StateDir, "restore_root": c.RestoreRoot} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) == string(filepath.Separator) {
 			return fmt.Errorf("%s must be an absolute, non-root path", name)
 		}
 	}
-	if overlaps(c.Source, c.StateDir) || overlaps(c.Source, c.RestoreRoot) || overlaps(c.StateDir, c.RestoreRoot) || within(c.Source, c.PasswordFile) {
-		return errors.New("source, state, restore and password paths must be separated")
+	if overlaps(c.Source, c.StateDir) || overlaps(c.Source, c.RestoreRoot) || overlaps(c.StateDir, c.RestoreRoot) {
+		return errors.New("source, state and restore paths must be separated")
 	}
 	if c.Method != "interval" && c.Method != "live" {
 		return errors.New("method must be interval or live")
@@ -159,8 +157,8 @@ func (c Config) Validate() error {
 	if c.Snapshots.KeepLast < 1 {
 		return errors.New("snapshot keep_last must be at least 1")
 	}
-	if c.Snapshots.Format != "restic" && c.Snapshots.Format != "tar" {
-		return errors.New("snapshot format must be restic or tar")
+	if c.Snapshots.Format != "tar" {
+		return errors.New("only TAR snapshots are supported; remove the snapshot format setting or set it to tar")
 	}
 	if c.MaxWatches < 1 {
 		return errors.New("max_watches must be at least 1")

@@ -4,16 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // First-run identity belongs in the writable state volume, never in /data.
@@ -229,92 +224,4 @@ func readSourceIDMarker(source string) (string, error) {
 		return "", errors.New("invalid source identity marker")
 	}
 	return string(value), nil
-}
-
-func (s *Service) ensureSnapshotRepository(ctx context.Context) error {
-	if !s.cfg.Snapshots.Enabled || s.cfg.Snapshots.Format != "restic" {
-		return nil
-	}
-	reg, err := s.registration(ctx)
-	if err != nil {
-		return err
-	}
-	if reg.RepositoryID != "" {
-		return nil
-	}
-	if _, err := s.source(ctx); err != nil {
-		return err
-	}
-	exists, err := s.snapshotRepositoryExists(ctx)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		s.log.Info("Initializing encrypted snapshot repository")
-		if err := s.restic(ctx, io.Discard, "init"); err != nil {
-			return err
-		}
-	} else if reg.IdentityMode != "marker" {
-		// A setup interrupted after init is safe to resume. Existing history
-		// must already belong to this source, or have no snapshots at all.
-		var buffer cappedOutput
-		buffer.limit = 1 << 20
-		if err := s.restic(ctx, &buffer, "snapshots", "--json"); err != nil {
-			return err
-		}
-		if buffer.truncated {
-			return errors.New("unbound snapshot history is too large to verify safely")
-		}
-		var records []struct {
-			Tags []string `json:"tags"`
-		}
-		if err := json.Unmarshal(buffer.data, &records); err != nil {
-			return err
-		}
-		for _, record := range records {
-			owned := false
-			for _, tag := range record.Tags {
-				if tag == "keepsync-source:"+reg.SourceID {
-					owned = true
-					break
-				}
-			}
-			if !owned {
-				return errors.New("existing encrypted history is not bound to this source")
-			}
-		}
-	}
-	id, err := s.repositoryID(ctx)
-	if err != nil {
-		return err
-	}
-	reg.RepositoryID = id
-	return writeJSON(s.statePath("registration.json"), reg)
-}
-
-func (s *Service) snapshotRepositoryExists(ctx context.Context) (bool, error) {
-	t, err := parseTarget(s.cfg.Repository, s.cfg.S3Endpoint)
-	if err != nil {
-		return false, err
-	}
-	if t.local != "" {
-		_, err := os.Stat(filepath.Join(t.local, "Snapshots", "config"))
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return err == nil, err
-	}
-	store, err := s.live(ctx)
-	if err != nil {
-		return false, err
-	}
-	remote, ok := store.(*s3Store)
-	if !ok {
-		return false, errors.New("unsupported snapshot target")
-	}
-	_, err = remote.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(t.bucket), Key: aws.String(path.Join(t.prefix, "Snapshots", "config"))})
-	if missingObject(err) {
-		return false, nil
-	}
-	return err == nil, err
 }
