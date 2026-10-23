@@ -4,8 +4,9 @@ Open an issue for larger changes, then submit a focused pull request.
 
 1. Install Go 1.27.3+ on Linux or macOS.
 2. Run `make check`. Recovery tests run without external backup tools.
-3. Run `make image-test` for Docker or packaging changes. This builds the image
-   and exercises environment-based setup, backup, integrity checking, and recovery.
+3. Run `make image-test` for Docker or packaging changes. This builds both root
+   and rootless images and exercises setup, permissions, backup, integrity
+   checking, and recovery for each.
 4. Releases publish Linux amd64/arm64 Docker images; local Go builds are for development.
 5. Document user-visible changes in `CHANGELOG.md`.
 
@@ -31,8 +32,9 @@ image and release notes. Never retag a release.
 Test both `compose.yaml` and `compose.advanced.yaml` when changing deployment
 examples. Both use the same TAR snapshot engine.
 
-Docker Hub releases publish `mayankfawkes/keepsync:<version>` and update `latest`
-for stable versions only. Create that Docker Hub repository, then add these
+Docker Hub releases publish `mayankfawkes/keepsync:<version>` (root) and
+`<version>-rootless`. Stable releases also update `latest` and `latest-rootless`.
+Create that Docker Hub repository, then add these
 GitHub repository Actions secrets before tagging:
 
 - `DOCKERHUB_USERNAME`: Docker Hub login with access to the repository.

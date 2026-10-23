@@ -1,6 +1,6 @@
 # Advanced configuration and recovery
 
-KeepSync 0.4.0 uses one snapshot engine: portable `.tar.gz` archives. Live mode
+KeepSync uses one snapshot engine: portable `.tar.gz` archives. Live mode
 and daily snapshots are enabled by default; no initialization or password is
 required. [`compose.advanced.yaml`](../compose.advanced.yaml) exposes optional
 controls. Use it on its own, not as an override:
@@ -8,6 +8,41 @@ controls. Use it on its own, not as an override:
 ```bash
 docker compose -f compose.advanced.yaml up -d keepsync
 ```
+
+## Root and rootless images
+
+`mayankfawkes/keepsync:latest` and version tags such as `0.4.1` run as root.
+`latest-rootless` and `0.4.1-rootless` run as `10001:10001`. Both contain the
+same executable and support the same commands. The root image handles host
+files owned by different application UIDs without a source-ownership migration.
+The source should still be mounted read-only.
+
+For the supplied Compose files, select the rootless variant in `.env`:
+
+```dotenv
+KEEPSYNC_IMAGE=mayankfawkes/keepsync:0.4.1-rootless
+```
+
+Fresh named state volumes inherit the image's ownership. For a rootless host
+state bind mount, create it before starting:
+
+```bash
+sudo install -d -o 10001 -g 10001 -m 0700 ./keepsync-state
+```
+
+If state already exists, stop KeepSync and use `sudo chown -R 10001:10001
+./keepsync-state` before switching to rootless. This includes existing lock,
+index, and status files; do not delete them. Grant read/traverse access to the
+source separately, or override `user: "UID:GID"` to match its existing owner.
+Changing users does not require a new source identity or S3 target.
+
+Rootless can additionally use `cap_drop: [ALL]`. Root deployments may need
+Docker's default DAC override capability to read private files belonging to
+other UIDs. Omitting `user:` always uses the image's configured user.
+
+Images through 0.4.0 ran as `10001:10001` by default. When upgrading, select the
+`-rootless` tag to retain that behavior. Switching root-written state back to
+rootless requires preparing its ownership as described above.
 
 ## Configuration reference
 
@@ -161,7 +196,7 @@ manual extraction requires no local registration.
 
 ## Resources and database backups
 
-The non-root scratch image contains the KeepSync executable and TLS roots.
+Both scratch image variants contain the KeepSync executable and TLS roots.
 `GOMEMLIMIT=64MiB` is a soft Go heap target; Compose's `mem_limit` is the hard
 process limit. Uploads stage one file at a time. Snapshots/downloads use disk
 staging: allow room for a complete compressed archive and restored files.

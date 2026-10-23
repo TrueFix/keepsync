@@ -17,7 +17,7 @@ existing host folder you want to back up:
 ```yaml
 services:
   keepsync:
-    image: mayankfawkes/keepsync:0.4.0
+    image: mayankfawkes/keepsync:0.4.1
     restart: unless-stopped
     environment:
       KEEPSYNC_TARGET: s3://your-bucket/backups/app
@@ -44,9 +44,19 @@ docker compose up -d keepsync
 docker compose logs -f keepsync
 ```
 
-The image supports Linux `amd64` and `arm64`. The default user `10001:10001`
-needs read access to your source; set `user: "UID:GID"` to match the application
-when needed. The state volume must be writable by that user.
+Images support Linux `amd64` and `arm64`:
+
+| Tags | Container user | Use case |
+|---|---|---|
+| `latest`, `0.4.1` | Root (`0:0`) | Host bind mounts, including root-owned application files/state |
+| `latest-rootless`, `0.4.1-rootless` | `10001:10001` | Non-root operation with source/state permissions prepared |
+
+No `user:` setting is needed. Removing it uses the selected image's default,
+not necessarily root. To run non-root, choose the `-rootless` image and ensure
+its UID can read the source and write state. Named state volumes are initialized
+with the selected image's directory ownership; Docker does not change ownership
+of host bind mounts. [Rootless permissions](docs/advanced.md#root-and-rootless-images)
+are covered in the advanced guide.
 
 For a standalone setup, use [`compose.yaml`](compose.yaml) and
 [`.env.example`](.env.example).

@@ -100,15 +100,22 @@ func lockStateContext(ctx context.Context, dir string) (func(), error) {
 
 func lockNamed(dir, name string) (func(), error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
+		return nil, stateAccessError(dir, err)
 	}
 	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return nil, err
+		return nil, stateAccessError(dir, err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("another operation is using this state directory: %w", err)
 	}
 	return func() { _ = f.Close() }, nil
+}
+
+func stateAccessError(dir string, err error) error {
+	if errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("state directory %q must be writable by container UID:GID %d:%d; fix bind-mount ownership or use the root image: %w", dir, os.Geteuid(), os.Getegid(), err)
+	}
+	return err
 }

@@ -20,7 +20,7 @@ RUN apk add --no-cache ca-certificates && \
     chmod 1777 /runtime/tmp
 
 # Only static executables, TLS roots, user records and empty writable directories.
-FROM scratch AS runtime
+FROM scratch AS runtime-base
 COPY --from=runtime-files /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=runtime-files /etc/passwd /etc/group /etc/
 COPY --from=runtime-files --chown=10001:10001 /runtime/ /
@@ -28,6 +28,14 @@ COPY --from=app-build /out/keepsync /usr/local/bin/keepsync
 COPY LICENSE /usr/share/licenses/keepsync/LICENSE
 ENV PATH=/usr/local/bin HOME=/home/keepsync TMPDIR=/var/lib/keepsync/tmp \
     GOMAXPROCS=1 GOMEMLIMIT=64MiB
-USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/keepsync"]
 CMD ["serve"]
+
+# Explicit opt-in non-root variant, published as latest-rootless.
+FROM runtime-base AS rootless
+USER 10001:10001
+
+# Default image supports root-owned host bind mounts without a chown step.
+FROM runtime-base AS runtime
+COPY --from=runtime-files --chown=0:0 /runtime/ /
+USER 0:0

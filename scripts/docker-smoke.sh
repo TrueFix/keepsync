@@ -7,7 +7,13 @@ cid=""
 trap 'if [ -n "$cid" ]; then docker rm -f "$cid"; fi; docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -c "rm -rf /work/*"; rmdir "$root"' EXIT
 mkdir -p "$root"/{data,state,repo,restore}
 printf 'recover me\n' > "$root/data/example.txt"
-docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -c 'chmod 0755 /work; chown -R 10001:10001 /work/*'
+image_user="$(docker image inspect "$image" --format '{{.Config.User}}')"
+case "$image_user" in
+  0:0|10001:10001) ;;
+  *) printf 'Unexpected image user: %s\n' "$image_user" >&2; exit 1 ;;
+esac
+docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -c \
+  'chmod 0755 /work; chown -R "$1" /work/*; chmod 0700 /work/state; chmod 0600 /work/data/example.txt' _ "$image_user"
 run() {
   docker run --rm --read-only --tmpfs /tmp:mode=1777 \
     -e KEEPSYNC_DATASET=smoke -e KEEPSYNC_TARGET=/repo -e KEEPSYNC_SNAPSHOTS_ENABLED=true \
@@ -87,6 +93,23 @@ docker run --rm --entrypoint sh -v "$root:/work" "$helper" -c 'test ! -e /work/d
 run backup
 run snapshot
 run check
+
+# Rootless must explain root-owned bind-mount failures rather than requiring
+# users to guess which UID the image runs as.
+if [ "$image_user" = 10001:10001 ]; then
+  docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -ec \
+    'chown 0:0 /work/state; chmod 0700 /work/state'
+  if failure="$(run backup 2>&1)"; then
+    printf 'Rootless unexpectedly wrote root-only state\n' >&2
+    exit 1
+  fi
+  case "$failure" in
+    *'state directory'*'10001:10001'*) ;;
+    *) printf 'Missing permission guidance: %s\n' "$failure" >&2; exit 1 ;;
+  esac
+  docker run --rm --user 0 --entrypoint sh -v "$root:/work" "$helper" -ec \
+    'chown 10001:10001 /work/state'
+fi
 snapshot="$(run status | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot_id"])')"
 run restore --snapshot "$snapshot" --target /restore/recovered
 docker run --rm --entrypoint sh -v "$root:/work" "$helper" -c 'cmp /work/data/example.txt /work/restore/recovered/data/example.txt && cmp /work/data/example.txt /work/repo/Live/example.txt'

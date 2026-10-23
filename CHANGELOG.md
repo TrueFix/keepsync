@@ -2,6 +2,15 @@
 
 All notable changes are tracked here. Versions follow Semantic Versioning.
 
+## 0.4.1 — 2026-10-23
+
+### Changed
+
+- Publish root images as `latest`/`0.4.1` and non-root images as `latest-rootless`/`0.4.1-rootless`, for both amd64 and arm64. The rootless image runs as `10001:10001`.
+- Default the Compose examples to the root variant for root-owned host bind mounts; document selecting rootless and preparing existing state permissions.
+- Report the effective container UID/GID and ownership guidance when state-directory access is denied.
+- Build and smoke-test both variants, including private state/source permissions and actionable rootless permission failures.
+
 ## 0.4.0 — 2026-10-22
 
 ### Changed

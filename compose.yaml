@@ -1,12 +1,11 @@
 services:
   keepsync:
-    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.4.0}
+    image: ${KEEPSYNC_IMAGE:-mayankfawkes/keepsync:0.4.1}
     restart: unless-stopped
     cpus: ${KEEPSYNC_CPUS:-0.5}
     mem_limit: ${KEEPSYNC_MEMORY_LIMIT:-256m}
     pids_limit: 128
     read_only: true
-    cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:
       KEEPSYNC_TARGET: ${KEEPSYNC_TARGET:?Set KEEPSYNC_TARGET to s3://bucket/prefix}
