@@ -3,15 +3,16 @@ module github.com/TrueFix/keepsync
 go 1.27.3
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.47.3
+	github.com/aws/aws-sdk-go-v2 v1.47.4
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.4.17
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
-	github.com/aws/smithy-go v1.28.5
+	github.com/aws/smithy-go v1.28.6
 	github.com/bmatcuk/doublestar/v4 v4.10.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/johannesboyne/gofakes3 v1.2.0
 	go.etcd.io/bbolt v1.5.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -31,6 +32,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	go.shabbyrobe.org/gocovmerge v0.0.0-20230507111327-fa4f82cfbf4d // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/tools v0.36.0 // indirect
 )
