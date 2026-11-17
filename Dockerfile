@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$VERSION" -o /out/keepsync ./cmd/keepsync
 
-FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime-files
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime-files
 RUN apk add --no-cache ca-certificates && \
     addgroup -g 10001 keepsync && adduser -D -u 10001 -G keepsync keepsync && \
     mkdir -p /runtime/var/lib/keepsync/tmp /runtime/restore /runtime/tmp /runtime/home/keepsync && \
